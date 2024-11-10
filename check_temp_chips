@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Get the current script path
+scriptPath=$(dirname $BASH_SOURCE[0])
+
+# Temperature trigger
+tempWarning=$4
+tempCritical=$5
+
+Service="TEMP"
+
+# Authentification
+auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+
+# Check if we successfully authenticate
+retVal=$?
+if [[ $retVal -eq 0 ]]; then
+
+   # Get the current toker
+   token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
+   
+   # Get the Hashboards info
+   info=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
+   
+   # Extract the temperature for all the boards
+   b1_highestChipTemp=$(echo $info | jq '.hashboards[0].highestChipTemp.temperature.degreeC' )
+   b2_highestChipTemp=$(echo $info | jq '.hashboards[1].highestChipTemp.temperature.degreeC' )
+   b3_highestChipTemp=$(echo $info | jq '.hashboards[2].highestChipTemp.temperature.degreeC' )
+   
+   if [[ $hash == *"ERROR"* ]]; then
+      echo "$Service UNKNOWN - Error getting power information"
+      retVal=3
+   else
+      # Return the informations
+	  status="OK"
+	  statusCode=0
+	  if [[ $b1_highestChipTemp > $tempCritical || $b2_highestChipTemp > $tempCritical || $b3_highestChipTemp > $tempCritical ]]; then
+	     status="CRITICAL"
+		 statusCode=2
+	  elif [[ ( $b1_highestChipTemp > $tempWarning ) || $b2_highestChipTemp > $tempWarning || $b3_highestChipTemp > $tempWarning ]]; then
+	     status="WARNING"
+		 statusCode=1
+	  fi
+      echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp] | TempHighestChipBoard1=$b1_highestChipTemp, TempHighestChipBoard2=$b2_highestChipTemp, TempHighestChipBoard3=$b3_highestChipTemp "
+      retVal=$statusCode
+   fi
+   
+else
+   echo "$Service UNKNOWN - Authentification failed for user '$2'"
+   retVal=3
+fi
+exit $retVal
