@@ -119,7 +119,7 @@ Les contributions sont les bienvenues ! Veuillez :
 
 Pour toute question ou problème :
 - Ouvrir une issue sur GitHub
-- Contacter : [Votre-email]
+- Contacter : gauclair@sarius.ca
 
 ## 📄 License
 
