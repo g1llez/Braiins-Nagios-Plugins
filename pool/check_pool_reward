@@ -1,0 +1,130 @@
+#!/bin/bash
+
+# Plugin Nagios pour calculer le reward estimé de Braiins Pool
+# Utilise l'API Braiins Pool pour récupérer FPPS, hashrate et shares
+
+# Function to format numbers with K, M, B suffixes
+format_number() {
+    local num=$1
+    if (( num >= 1000000000 )); then
+        printf "%.1fB" $(echo "scale=1; $num/1000000000" | bc -l)
+    elif (( num >= 1000000 )); then
+        printf "%.1fM" $(echo "scale=1; $num/1000000" | bc -l)
+    elif (( num >= 1000 )); then
+        printf "%.1fK" $(echo "scale=1; $num/1000" | bc -l)
+    else
+        echo "$num"
+    fi
+}
+
+# Variables
+TOKEN=${1}
+WARNING_THRESHOLD_SATS=${2}
+CRITICAL_THRESHOLD_SATS=${3}
+
+Service="BRAIINS_REWARD"
+
+# Vérification des paramètres
+if [ -z "$TOKEN" ] || [ -z "$WARNING_THRESHOLD_SATS" ] || [ -z "$CRITICAL_THRESHOLD_SATS" ]; then
+    echo "UNKNOWN: All parameters are required"
+    echo "Usage: $0 <token> <warning_threshold_sats_per_hour> <critical_threshold_sats_per_hour>"
+    exit 3
+fi
+
+# Vérification des dépendances
+if ! command -v curl &> /dev/null; then
+    echo "UNKNOWN: curl is required but not installed"
+    exit 3
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "UNKNOWN: jq is required but not installed"
+    exit 3
+fi
+
+# Récupération des données via l'API Braiins
+API_URL="https://pool.braiins.com/accounts/profile/json/btc/"
+RESPONSE=$(curl -s -H "Pool-Auth-Token: $TOKEN" "$API_URL")
+
+# Vérification de la réponse HTTP
+if [ $? -ne 0 ]; then
+    echo "CRITICAL: Failed to connect to Braiins Pool API"
+    exit 2
+fi
+
+# Vérification si la réponse contient une erreur
+if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+    ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "Unknown error"')
+    echo "CRITICAL: API Error - $ERROR_MSG"
+    exit 2
+fi
+
+# Extraction des données nécessaires
+USERNAME=$(echo "$RESPONSE" | jq -r '.username // empty')
+SHARES_60M=$(echo "$RESPONSE" | jq -r '.btc.shares_60m // empty')
+SHARES_24H=$(echo "$RESPONSE" | jq -r '.btc.shares_24h // empty')
+HASHRATE_60M=$(echo "$RESPONSE" | jq -r '.btc.hash_rate_60m // empty')
+HASHRATE_UNIT=$(echo "$RESPONSE" | jq -r '.btc.hash_rate_unit // empty')
+ALL_TIME_REWARD=$(echo "$RESPONSE" | jq -r '.btc.all_time_reward // empty')
+
+if [ -z "$USERNAME" ] || [ "$USERNAME" = "null" ] || [ -z "$SHARES_60M" ] || [ "$SHARES_60M" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve required data from API response"
+    exit 3
+fi
+
+# Récupération du FPPS depuis l'API publique
+FPPS_RESPONSE=$(curl -s -H "Pool-Auth-Token: $TOKEN" "https://pool.braiins.com/stats/json/btc")
+FPPS=$(echo "$FPPS_RESPONSE" | jq -r '.btc.fpps_rate // empty')
+
+if [ -z "$FPPS" ] || [ "$FPPS" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve FPPS from API response"
+    exit 3
+fi
+
+# Conversion en nombre pour calculs
+FPPS_NUM=$(echo "$FPPS" | sed 's/E/*10^/g' | bc -l 2>/dev/null || echo "$FPPS")
+
+# Conversion du hashrate 60m en TH/s si nécessaire
+if [ "$HASHRATE_UNIT" = "Gh/s" ]; then
+    HASHRATE_60M_TH=$(echo "scale=2; $HASHRATE_60M / 1000" | bc -l)
+else
+    HASHRATE_60M_TH=$HASHRATE_60M
+fi
+
+# Calcul du reward basé sur le hashrate 60m et le FPPS
+# Le FPPS est en sats/jour par TH/s
+# Reward = Hashrate (TH/s) × FPPS (sats/jour/TH/s) / 24 = sats/heure
+FPPS_SATS=$(echo "scale=0; $FPPS_NUM * 100000000" | bc -l | sed 's/\..*$//')
+ESTIMATED_HOURLY_REWARD=$(echo "scale=0; $HASHRATE_60M_TH * $FPPS_SATS / 24" | bc -l | sed 's/\..*$//')
+
+# Ajustement basé sur les données historiques si disponibles
+if [[ $SHARES_24H != "null" ]] && [[ $SHARES_24H -gt 0 ]]; then
+    # Calcul de la performance vs moyenne 24h
+    SHARES_PER_HOUR_24H=$(echo "scale=0; $SHARES_24H / 24" | bc -l)
+    CURRENT_PERFORMANCE_RATIO=$(echo "scale=2; $SHARES_60M / $SHARES_PER_HOUR_24H" | bc -l)
+else
+    CURRENT_PERFORMANCE_RATIO="N/A"
+fi
+
+
+
+# Détermination du statut
+STATUS="OK"
+EXIT_CODE=0
+
+if (( $(echo "$ESTIMATED_HOURLY_REWARD <= $CRITICAL_THRESHOLD_SATS" | bc -l) )); then
+    STATUS="CRITICAL"
+    EXIT_CODE=2
+elif (( $(echo "$ESTIMATED_HOURLY_REWARD <= $WARNING_THRESHOLD_SATS" | bc -l) )); then
+    STATUS="WARNING"
+    EXIT_CODE=1
+fi
+
+# Formatage des valeurs pour l'affichage
+SHARES_60M_FORMATTED=$(format_number $SHARES_60M)
+FPPS_SATS=$(echo "scale=0; $FPPS_NUM * 100000000" | bc -l | sed 's/\..*$//')
+
+# Affichage du résultat
+echo "$STATUS: Braiins Reward = $ESTIMATED_HOURLY_REWARD sats/hour (User: $USERNAME, Hashrate 60m: ${HASHRATE_60M_TH}TH/s, FPPS: $FPPS_SATS sats, Shares 60m: $SHARES_60M_FORMATTED, Performance: ${CURRENT_PERFORMANCE_RATIO}x) | reward_per_hour=$ESTIMATED_HOURLY_REWARD;$WARNING_THRESHOLD_SATS;$CRITICAL_THRESHOLD_SATS fpps=$FPPS_SATS"
+
+exit $EXIT_CODE 

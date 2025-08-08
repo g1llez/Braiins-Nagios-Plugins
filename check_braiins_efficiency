@@ -1,0 +1,133 @@
+#!/bin/bash
+
+# Plugin Nagios pour calculer l'efficacité Braiins (sats/watt/heure)
+# Combine les données de power (machine) et reward (pool Braiins)
+
+# Get the current script path
+scriptPath=$(dirname $BASH_SOURCE[0])
+
+# Variables
+HOST_ADDRESS=${1}
+USERNAME=${2}
+PASSWORD=${3}
+BRAIINS_TOKEN=${4}
+WARNING_THRESHOLD=${5}
+CRITICAL_THRESHOLD=${6}
+
+Service="BRAIINS_EFFICIENCY"
+
+# Vérification des paramètres
+if [ -z "$HOST_ADDRESS" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ] || [ -z "$BRAIINS_TOKEN" ] || [ -z "$WARNING_THRESHOLD" ] || [ -z "$CRITICAL_THRESHOLD" ]; then
+    echo "UNKNOWN: All parameters are required"
+    echo "Usage: $0 <host_address> <username> <password> <braiins_token> <warning_threshold> <critical_threshold>"
+    exit 3
+fi
+
+# Vérification des dépendances
+if ! command -v curl &> /dev/null; then
+    echo "UNKNOWN: curl is required but not installed"
+    exit 3
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "UNKNOWN: jq is required but not installed"
+    exit 3
+fi
+
+# 1. Récupération des données de power depuis la machine
+auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$USERNAME'", "password": "'$PASSWORD'"}' $HOST_ADDRESS:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+
+# Vérification de l'authentification
+if [ $? -ne 0 ]; then
+    echo "UNKNOWN: Authentication failed for user '$USERNAME' on $HOST_ADDRESS"
+    exit 3
+fi
+
+# Récupération du token
+token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
+
+# Récupération des données de power
+power_info=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $HOST_ADDRESS:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
+
+# Extraction de la consommation électrique
+watt=$(echo $power_info | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' | tr -d '"')
+
+if [ -z "$watt" ] || [ "$watt" = "null" ] || [ "$watt" = "0" ]; then
+    echo "UNKNOWN: Could not retrieve power consumption from machine"
+    exit 3
+fi
+
+# 2. Récupération des données de reward depuis Braiins Pool
+API_URL="https://pool.braiins.com/accounts/profile/json/btc/"
+RESPONSE=$(curl -s -H "Pool-Auth-Token: $BRAIINS_TOKEN" "$API_URL")
+
+# Vérification de la réponse HTTP
+if [ $? -ne 0 ]; then
+    echo "CRITICAL: Failed to connect to Braiins Pool API"
+    exit 2
+fi
+
+# Vérification si la réponse contient une erreur
+if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+    ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "Unknown error"')
+    echo "CRITICAL: API Error - $ERROR_MSG"
+    exit 2
+fi
+
+# Extraction des données nécessaires
+USERNAME_POOL=$(echo "$RESPONSE" | jq -r '.username // empty')
+HASHRATE_60M=$(echo "$RESPONSE" | jq -r '.btc.hash_rate_60m // empty')
+HASHRATE_UNIT=$(echo "$RESPONSE" | jq -r '.btc.hash_rate_unit // empty')
+
+if [ -z "$USERNAME_POOL" ] || [ "$USERNAME_POOL" = "null" ] || [ -z "$HASHRATE_60M" ] || [ "$HASHRATE_60M" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve required data from Braiins API response"
+    exit 3
+fi
+
+# Récupération du FPPS
+FPPS_RESPONSE=$(curl -s -H "Pool-Auth-Token: $BRAIINS_TOKEN" "https://pool.braiins.com/stats/json/btc")
+FPPS=$(echo "$FPPS_RESPONSE" | jq -r '.btc.fpps_rate // empty')
+
+if [ -z "$FPPS" ] || [ "$FPPS" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve FPPS from API response"
+    exit 3
+fi
+
+# Conversion en nombre pour calculs
+FPPS_NUM=$(echo "$FPPS" | sed 's/E/*10^/g' | bc -l 2>/dev/null || echo "$FPPS")
+
+# Conversion du hashrate en TH/s si nécessaire
+if [ "$HASHRATE_UNIT" = "Gh/s" ]; then
+    HASHRATE_60M_TH=$(echo "scale=2; $HASHRATE_60M / 1000" | bc -l)
+else
+    HASHRATE_60M_TH=$HASHRATE_60M
+fi
+
+# Calcul du reward horaire
+FPPS_SATS=$(echo "scale=0; $FPPS_NUM * 100000000" | bc -l | sed 's/\..*$//')
+ESTIMATED_HOURLY_REWARD=$(echo "scale=0; $HASHRATE_60M_TH * $FPPS_SATS / 24" | bc -l | sed 's/\..*$//')
+
+# 3. Calcul de l'efficacité (sats/watt/heure)
+if [ "$watt" -gt 0 ]; then
+    EFFICIENCY=$(echo "scale=4; $ESTIMATED_HOURLY_REWARD / $watt" | bc -l)
+else
+    echo "UNKNOWN: Power consumption is zero, cannot calculate efficiency"
+    exit 3
+fi
+
+# Détermination du statut
+STATUS="OK"
+EXIT_CODE=0
+
+if (( $(echo "$EFFICIENCY <= $CRITICAL_THRESHOLD" | bc -l) )); then
+    STATUS="CRITICAL"
+    EXIT_CODE=2
+elif (( $(echo "$EFFICIENCY <= $WARNING_THRESHOLD" | bc -l) )); then
+    STATUS="WARNING"
+    EXIT_CODE=1
+fi
+
+# Affichage du résultat
+echo "$STATUS: Braiins Efficiency = $EFFICIENCY sats/W/H (User: $USERNAME_POOL, Hashrate: ${HASHRATE_60M_TH}TH/s, Power: ${watt}W, Reward: ${ESTIMATED_HOURLY_REWARD}sats/h) | efficiency=$EFFICIENCY"
+
+exit $EXIT_CODE 

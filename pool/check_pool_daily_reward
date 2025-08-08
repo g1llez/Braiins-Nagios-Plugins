@@ -1,0 +1,84 @@
+#!/bin/bash
+
+# Plugin Nagios pour vérifier le reward quotidien réel de Braiins Pool
+# Utilise l'API des 90 derniers jours pour obtenir le reward de la journée précédente
+
+# Variables
+TOKEN=${1}
+WARNING_THRESHOLD_SATS=${2}
+CRITICAL_THRESHOLD_SATS=${3}
+
+Service="BRAIINS_DAILY_REWARD_V3"
+
+# Vérification des paramètres
+if [ -z "$TOKEN" ] || [ -z "$WARNING_THRESHOLD_SATS" ] || [ -z "$CRITICAL_THRESHOLD_SATS" ]; then
+    echo "UNKNOWN: All parameters are required"
+    echo "Usage: $0 <token> <warning_threshold_sats> <critical_threshold_sats>"
+    exit 3
+fi
+
+# Vérification des dépendances
+if ! command -v curl &> /dev/null; then
+    echo "UNKNOWN: curl is required but not installed"
+    exit 3
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "UNKNOWN: jq is required but not installed"
+    exit 3
+fi
+
+# Récupération des données via l'API Braiins (90 derniers jours)
+API_URL="https://pool.braiins.com/accounts/rewards/json/btc"
+RESPONSE=$(curl -s -H "Pool-Auth-Token: $TOKEN" "$API_URL")
+
+# Vérification de la réponse HTTP
+if [ $? -ne 0 ]; then
+    echo "CRITICAL: Failed to connect to Braiins Pool API"
+    exit 2
+fi
+
+# Vérification si la réponse contient une erreur
+if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+    ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "Unknown error"')
+    echo "CRITICAL: API Error - $ERROR_MSG"
+    exit 2
+fi
+
+# Extraction du reward de la journée précédente (index 0 = hier, la journée la plus récente)
+YESTERDAY_REWARD=$(echo "$RESPONSE" | jq -r '.btc.daily_rewards[0].total_reward // empty')
+
+if [ -z "$YESTERDAY_REWARD" ] || [ "$YESTERDAY_REWARD" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve yesterday's reward from API response"
+    exit 3
+fi
+
+# Conversion en sats
+YESTERDAY_REWARD_SATS=$(echo "scale=0; $YESTERDAY_REWARD * 100000000" | bc -l | sed 's/\..*$//')
+
+# Calcul des sats/h (division par 24 heures)
+YESTERDAY_REWARD_SATS_PER_HOUR=$(echo "scale=0; $YESTERDAY_REWARD_SATS / 24" | bc -l | sed 's/\..*$//')
+
+# Récupération du nom d'utilisateur depuis l'API profile
+PROFILE_RESPONSE=$(curl -s -H "Pool-Auth-Token: $TOKEN" "https://pool.braiins.com/accounts/profile/json/btc/")
+USERNAME=$(echo "$PROFILE_RESPONSE" | jq -r '.username // "unknown"')
+
+# Détermination du statut
+STATUS="OK"
+EXIT_CODE=0
+
+if (( YESTERDAY_REWARD_SATS <= CRITICAL_THRESHOLD_SATS )); then
+    STATUS="CRITICAL"
+    EXIT_CODE=2
+elif (( YESTERDAY_REWARD_SATS <= WARNING_THRESHOLD_SATS )); then
+    STATUS="WARNING"
+    EXIT_CODE=1
+fi
+
+# Récupération de la date pour l'affichage
+YESTERDAY_DATE_DISPLAY=$(echo "$RESPONSE" | jq -r '.btc.daily_rewards[0].date | strftime("%Y-%m-%d")')
+
+# Affichage du résultat
+echo "$STATUS: Braiins Daily Reward = $YESTERDAY_REWARD_SATS sats ($YESTERDAY_REWARD_SATS_PER_HOUR sats/h) (User: $USERNAME, Date: $YESTERDAY_DATE_DISPLAY) | daily_reward=$YESTERDAY_REWARD_SATS"
+
+exit $EXIT_CODE 
