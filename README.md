@@ -7,7 +7,6 @@ Ce dossier contient les plugins Nagios spécifiquement développés pour le moni
 ```
 braiins/
 ├── README.md                    # 📄 Documentation principale
-├── check_braiins_efficiency     # ⚡ Efficiency combinée (pool + machine)
 ├── pool/                        # 🌊 Plugins Pool Braiins
 │   ├── README.md               # 📄 Documentation pool
 │   ├── check_pool_hashrate     # 🔍 Hashrate & Shares
@@ -19,6 +18,7 @@ braiins/
     ├── check_machine_hashrate  # 🔍 Hashrate machine
     ├── check_machine_power     # ⚡ Power consumption
     ├── check_machine_efficiency # ⚡ Efficiency (J/TH)
+    ├── check_braiins_efficiency # ⚡ Efficiency (sats/W/H combined)
     ├── check_machine_temp_boards # 🌡️ Board temperature
     └── check_machine_temp_chips  # 🌡️ Chip temperature
 ```
@@ -79,7 +79,9 @@ define command{
 
 define command{
         command_name    check_machine_efficiency
+    ├── check_braiins_efficiency # ⚡ Efficiency (sats/W/H combined)
         command_line    $USER2$/braiins/machine/check_machine_efficiency $HOSTADDRESS$ $ARG1$ $ARG2$ $ARG3$ $ARG4$
+    ├── check_braiins_efficiency # ⚡ Efficiency (sats/W/H combined)
         }
 
 define command{
@@ -95,7 +97,7 @@ define command{
 # Combined efficiency
 define command{
         command_name    check_braiins_efficiency
-        command_line    $USER2$/braiins/check_braiins_efficiency $HOSTADDRESS$ $ARG1$ $ARG2$ $ARG3$ $ARG4$ $ARG5$
+        command_line    $USER2$/braiins/machine/check_braiins_efficiency $HOSTADDRESS$ $ARG1$ $ARG2$ $ARG3$ $ARG4$ $ARG5$
         }
 ```
 
