@@ -102,9 +102,9 @@ define command{
 ## 🔗 Repository GitHub
 
 Ces plugins sont maintenus dans le repository GitHub :
-- **Repository** : [Votre-username/nagios-braiins-plugins](https://github.com/Votre-username/nagios-braiins-plugins)
-- **License** : [À définir]
-- **Issues** : [GitHub Issues](https://github.com/Votre-username/nagios-braiins-plugins/issues)
+- **Repository** : g1llez/Braiins-Nagios-Plugins(https://github.com/g1llez/Braiins-Nagios-Plugins)
+- **License** : Apache-2.0
+- **Issues : https://github.com/g1llez/Braiins-Nagios-Plugins/issues)
 
 ## 🤝 Contribution
 
@@ -123,5 +123,5 @@ Pour toute question ou problème :
 
 ## 📄 License
 
-[À définir - MIT, GPL, etc.]
+Apache-2.0
 
