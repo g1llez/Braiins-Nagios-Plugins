@@ -41,7 +41,6 @@ if [[ $retVal -eq 0 ]]; then
 		 statusCode=1
 	  fi
       echo "$Service $status - Power usage: $watt Watts, Target: $target Watts | watt=$watt target=$target"
-      echo "$Service $status - Power usage: $watt Watts, Target: $target Watts | watt=$watt, target=$target "
       retVal=$statusCode
    fi
    

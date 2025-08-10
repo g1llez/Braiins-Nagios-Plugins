@@ -42,7 +42,6 @@ if [[ $retVal -eq 0 ]]; then
 		 statusCode=1
 	  fi
       echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp] | temp_chip_board_1=$b1_highestChipTemp temp_chip_board_2=$b2_highestChipTemp temp_chip_board_3=$b3_highestChipTemp"
-      echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp] | TempHighestChipBoard1=$b1_highestChipTemp, TempHighestChipBoard2=$b2_highestChipTemp, TempHighestChipBoard3=$b3_highestChipTemp "
       retVal=$statusCode
    fi
    

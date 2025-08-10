@@ -42,7 +42,6 @@ if [[ $retVal -eq 0 ]]; then
 		 statusCode=1
 	  fi
       echo "$Service $status - Boards: [$b1_Temp,$b2_Temp,$b3_Temp] | temp_board_1=$b1_Temp temp_board_2=$b2_Temp temp_board_3=$b3_Temp"
-      echo "$Service $status - Boards: [$b1_Temp,$b2_Temp,$b3_Temp] | TempBoard1=$b1_Temp, TempBoard2=$b2_Temp, TempBoard3=$b3_Temp "
       retVal=$statusCode
    fi
    

@@ -51,7 +51,6 @@ if [[ $retVal -eq 0 ]]; then
 		 statusCode=1
 	  fi
       echo "$Service $status - Efficiency: $efficiency J/TH | efficiency=$efficiency"
-      echo "$Service $status - Efficiency: $efficiency J/TH | efficiency=$efficiency "
       retVal=$statusCode
    fi
    
