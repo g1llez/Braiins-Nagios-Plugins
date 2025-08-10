@@ -10,11 +10,8 @@ tempCritical=$5
 Service="TEMP"
 
 # Authentification
-<<<<<<< HEAD
 auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
-=======
 auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
->>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 
 # Check if we successfully authenticate
 retVal=$?
@@ -24,11 +21,8 @@ if [[ $retVal -eq 0 ]]; then
    token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
    
    # Get the Hashboards info
-<<<<<<< HEAD
    info=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
-=======
    info=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
->>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
    
    # Extract the temperature for all the boards
    b1_highestChipTemp=$(echo $info | jq '.hashboards[0].highestChipTemp.temperature.degreeC' )
@@ -49,11 +43,8 @@ if [[ $retVal -eq 0 ]]; then
 	     status="WARNING"
 		 statusCode=1
 	  fi
-<<<<<<< HEAD
       echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp] | temp_chip_board_1=$b1_highestChipTemp temp_chip_board_2=$b2_highestChipTemp temp_chip_board_3=$b3_highestChipTemp"
-=======
       echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp] | TempHighestChipBoard1=$b1_highestChipTemp, TempHighestChipBoard2=$b2_highestChipTemp, TempHighestChipBoard3=$b3_highestChipTemp "
->>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
       retVal=$statusCode
    fi
    

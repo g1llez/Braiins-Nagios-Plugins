@@ -125,10 +125,6 @@ SHARES_60M_FORMATTED=$(format_number $SHARES_60M)
 FPPS_SATS=$(echo "scale=0; $FPPS_NUM * 100000000" | bc -l | sed 's/\..*$//')
 
 # Affichage du résultat
-<<<<<<< HEAD
 echo "$STATUS: Braiins Reward = $ESTIMATED_HOURLY_REWARD sats/hour (User: $USERNAME, Hashrate 60m: ${HASHRATE_60M_TH}TH/s, FPPS: $FPPS_SATS sats, Shares 60m: $SHARES_60M_FORMATTED, Performance: ${CURRENT_PERFORMANCE_RATIO}x) | reward_per_hour=$ESTIMATED_HOURLY_REWARD fpps_sats=$FPPS_SATS"
-=======
-echo "$STATUS: Braiins Reward = $ESTIMATED_HOURLY_REWARD sats/hour (User: $USERNAME, Hashrate 60m: ${HASHRATE_60M_TH}TH/s, FPPS: $FPPS_SATS sats, Shares 60m: $SHARES_60M_FORMATTED, Performance: ${CURRENT_PERFORMANCE_RATIO}x) | reward_per_hour=$ESTIMATED_HOURLY_REWARD;$WARNING_THRESHOLD_SATS;$CRITICAL_THRESHOLD_SATS fpps=$FPPS_SATS"
->>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 
 exit $EXIT_CODE 
