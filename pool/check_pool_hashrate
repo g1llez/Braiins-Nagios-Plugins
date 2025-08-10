@@ -123,15 +123,25 @@ elif (( $(echo "$current_value < $HashWarning" | bc -l) )); then
     statusCode=1
 fi
 
+<<<<<<< HEAD
 # Return the information based on metric type (format simple)
 if [[ $METRIC_TYPE == "hashrate" ]]; then
     echo "$Service $status - User: $username, 5m: $hashrate_5m_th $unit_display, 60m: $hashrate_60m_th $unit_display, 24h: $hashrate_24h_th $unit_display | hashrate_5m=$hashrate_5m_th hashrate_60m=$hashrate_60m_th hashrate_24h=$hashrate_24h_th"
+=======
+# Return the information based on metric type
+if [[ $METRIC_TYPE == "hashrate" ]]; then
+    echo "$Service $status - User: $username, 5m: $hashrate_5m_th $unit_display, 60m: $hashrate_60m_th $unit_display, 24h: $hashrate_24h_th $unit_display | HashRate5m=$hashrate_5m_th, HashRate60m=$hashrate_60m_th, HashRate24h=$hashrate_24h_th"
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 elif [[ $METRIC_TYPE == "shares" ]]; then
     # Format shares for display
     shares_5m_formatted=$(format_number $shares_5m)
     shares_60m_formatted=$(format_number $shares_60m)
     shares_24h_formatted=$(format_number $shares_24h)
+<<<<<<< HEAD
     echo "$Service $status - User: $username, 5m: $shares_5m_formatted shares, 60m: $shares_60m_formatted shares, 24h: $shares_24h_formatted shares | shares_5m=$shares_5m shares_60m=$shares_60m shares_24h=$shares_24h"
+=======
+    echo "$Service $status - User: $username, 5m: $shares_5m_formatted shares, 60m: $shares_60m_formatted shares, 24h: $shares_24h_formatted shares | Shares5m=$shares_5m, Shares60m=$shares_60m, Shares24h=$shares_24h"
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 fi
 
 exit $statusCode 

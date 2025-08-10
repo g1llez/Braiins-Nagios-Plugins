@@ -10,7 +10,11 @@ HashCritical=$5
 Service="HASHRATE"
 
 # Authentification
+<<<<<<< HEAD
 auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+=======
+auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 
 # Check if we successfully authenticate
 retVal=$?
@@ -20,11 +24,19 @@ if [[ $retVal -eq 0 ]]; then
    token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
    
    # Get Nominal Hashrate
+<<<<<<< HEAD
    nominalhash=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState' | jq '.powerTargetModeState.profile.measuredHashrate.gigahashPerSecond')
    nominalTH=$(printf "%.1f" $(echo "$nominalhash/1000" | bc -l))
    
    # Get the Hashboards info
    boardsinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
+=======
+   nominalhash=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState' | jq '.powerTargetModeState.profile.measuredHashrate.gigahashPerSecond')
+   nominalTH=$(printf "%.1f" $(echo "$nominalhash/1000" | bc -l))
+   
+   # Get the Hashboards info
+   boardsinfo=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
    
    # Extract the hashrate for all the boards
    b1_5m_hash=$(echo $boardsinfo | jq '.hashboards[0].stats.realHashrate.last5m.gigahashPerSecond' )
@@ -52,7 +64,11 @@ if [[ $retVal -eq 0 ]]; then
 	     status="WARNING"
 		 statusCode=1
 	  fi
+<<<<<<< HEAD
       echo "$Service $status - [$b1_5m_TH,$b2_5m_TH,$b3_5m_TH], Total $total_5m_TH TH/s, Nominal $nominalTH TH/s| hashboard_1=$b1_5m_TH hashboard_2=$b2_5m_TH hashboard_3=$b3_5m_TH total_th=$total_5m_TH nominal_th=$nominalTH"
+=======
+      echo "$Service $status - [$b1_5m_TH,$b2_5m_TH,$b3_5m_TH], Total $total_5m_TH TH/s, Nominal $nominalTH TH/s| HashBoard1=$b1_5m_TH, HashBoard2=$b2_5m_TH, HashBoard3=$b3_5m_TH, TotalTH=$total_5m_TH, NominalTH=$nominalTH "
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
       retVal=$statusCode
    fi
    

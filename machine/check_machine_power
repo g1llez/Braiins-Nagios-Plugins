@@ -10,7 +10,11 @@ powerCritical=$5
 Service="POWER"
 
 # Authentification
+<<<<<<< HEAD
 auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+=======
+auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 
 # Check if we successfully authenticate
 retVal=$?
@@ -20,7 +24,11 @@ if [[ $retVal -eq 0 ]]; then
    token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
    
    # Get the Performance info
+<<<<<<< HEAD
    info=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
+=======
+   info=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
    
    # Extract the power data
    target=$(echo $info | jq '.powerTargetModeState.profile.target.watt' | tr -d '"')
@@ -40,7 +48,11 @@ if [[ $retVal -eq 0 ]]; then
 	     status="WARNING"
 		 statusCode=1
 	  fi
+<<<<<<< HEAD
       echo "$Service $status - Power usage: $watt Watts, Target: $target Watts | watt=$watt target=$target"
+=======
+      echo "$Service $status - Power usage: $watt Watts, Target: $target Watts | watt=$watt, target=$target "
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
       retVal=$statusCode
    fi
    

@@ -7,7 +7,10 @@ Ce dossier contient les plugins Nagios spécifiquement développés pour le moni
 ```
 braiins/
 ├── README.md                    # 📄 Documentation principale
+<<<<<<< HEAD
 ├── check_braiins_efficiency     # ⚡ Efficiency combinée (pool + machine)
+=======
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 ├── pool/                        # 🌊 Plugins Pool Braiins
 │   ├── README.md               # 📄 Documentation pool
 │   ├── check_pool_hashrate     # 🔍 Hashrate & Shares
@@ -19,6 +22,10 @@ braiins/
     ├── check_machine_hashrate  # 🔍 Hashrate machine
     ├── check_machine_power     # ⚡ Power consumption
     ├── check_machine_efficiency # ⚡ Efficiency (J/TH)
+<<<<<<< HEAD
+=======
+    ├── check_braiins_efficiency # ⚡ Efficiency (sats/W/H combined)
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
     ├── check_machine_temp_boards # 🌡️ Board temperature
     └── check_machine_temp_chips  # 🌡️ Chip temperature
 ```
@@ -79,7 +86,13 @@ define command{
 
 define command{
         command_name    check_machine_efficiency
+<<<<<<< HEAD
         command_line    $USER2$/braiins/machine/check_machine_efficiency $HOSTADDRESS$ $ARG1$ $ARG2$ $ARG3$ $ARG4$
+=======
+    ├── check_braiins_efficiency # ⚡ Efficiency (sats/W/H combined)
+        command_line    $USER2$/braiins/machine/check_machine_efficiency $HOSTADDRESS$ $ARG1$ $ARG2$ $ARG3$ $ARG4$
+    ├── check_braiins_efficiency # ⚡ Efficiency (sats/W/H combined)
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
         }
 
 define command{
@@ -95,16 +108,26 @@ define command{
 # Combined efficiency
 define command{
         command_name    check_braiins_efficiency
+<<<<<<< HEAD
         command_line    $USER2$/braiins/check_braiins_efficiency $HOSTADDRESS$ $ARG1$ $ARG2$ $ARG3$ $ARG4$ $ARG5$
+=======
+        command_line    $USER2$/braiins/machine/check_braiins_efficiency $HOSTADDRESS$ $ARG1$ $ARG2$ $ARG3$ $ARG4$ $ARG5$
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
         }
 ```
 
 ## 🔗 Repository GitHub
 
 Ces plugins sont maintenus dans le repository GitHub :
+<<<<<<< HEAD
 - **Repository** : [Votre-username/nagios-braiins-plugins](https://github.com/Votre-username/nagios-braiins-plugins)
 - **License** : [À définir]
 - **Issues** : [GitHub Issues](https://github.com/Votre-username/nagios-braiins-plugins/issues)
+=======
+- **Repository** : g1llez/Braiins-Nagios-Plugins(https://github.com/g1llez/Braiins-Nagios-Plugins)
+- **License** : Apache-2.0
+- **Issues : https://github.com/g1llez/Braiins-Nagios-Plugins/issues)
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 
 ## 🤝 Contribution
 
@@ -119,9 +142,17 @@ Les contributions sont les bienvenues ! Veuillez :
 
 Pour toute question ou problème :
 - Ouvrir une issue sur GitHub
+<<<<<<< HEAD
 - Contacter : [Votre-email]
 
 ## 📄 License
 
 [À définir - MIT, GPL, etc.]
+=======
+- Contacter : gauclair@sarius.ca
+
+## 📄 License
+
+Apache-2.0
+>>>>>>> 1fb5a09db34020214fecf947dd99185302a1de6b
 
