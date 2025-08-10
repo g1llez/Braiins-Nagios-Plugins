@@ -1,0 +1,52 @@
+#!/bin/bash
+
+# Get the current script path
+scriptPath=$(dirname $BASH_SOURCE[0])
+
+# Temperature trigger
+tempWarning=$4
+tempCritical=$5
+
+Service="TEMP"
+
+# Authentification
+auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+
+# Check if we successfully authenticate
+retVal=$?
+if [[ $retVal -eq 0 ]]; then
+
+   # Get the current toker
+   token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
+   
+   # Get the Hashboards info
+   info=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
+   
+   # Extract the temperature for all the boards
+   b1_Temp=$(echo $info | jq '.hashboards[0].boardTemp.degreeC' )
+   b2_Temp=$(echo $info | jq '.hashboards[1].boardTemp.degreeC' )
+   b3_Temp=$(echo $info | jq '.hashboards[2].boardTemp.degreeC' )
+   
+   if [[ $hash == *"ERROR"* ]]; then
+      echo "$Service UNKNOWN - Error getting temp information"
+      retVal=3
+   else
+      # Return the informations
+	  status="OK"
+	  statusCode=0
+	  if [[ $b1_Temp > $tempCritical || $b2_Temp > $tempCritical || $b3_Temp > $tempCritical ]]; then
+	     status="CRITICAL"
+		 statusCode=2
+	  elif [[ ( $b1_Temp > $tempWarning ) || $b2_Temp > $tempWarning || $b3_Temp > $tempWarning ]]; then
+	     status="WARNING"
+		 statusCode=1
+	  fi
+      echo "$Service $status - Boards: [$b1_Temp,$b2_Temp,$b3_Temp] | temp_board_1=$b1_Temp temp_board_2=$b2_Temp temp_board_3=$b3_Temp"
+      retVal=$statusCode
+   fi
+   
+else
+   echo "$Service UNKNOWN - Authentification failed for user '$2'"
+   retVal=3
+fi
+exit $retVal

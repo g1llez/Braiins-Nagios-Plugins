@@ -1,0 +1,75 @@
+#!/bin/bash
+
+# Plugin Nagios pour vérifier le FPS (Fee Per Share) de Braiins Pool
+# Utilise l'API Braiins Pool avec authentification par token
+
+# Variables
+TOKEN=${1}
+API_URL="https://pool.braiins.com/stats/json/btc"
+WARNING_THRESHOLD_SATS=${2}
+CRITICAL_THRESHOLD_SATS=${3}
+
+# Vérification des paramètres
+if [ -z "$TOKEN" ] || [ -z "$WARNING_THRESHOLD_SATS" ] || [ -z "$CRITICAL_THRESHOLD_SATS" ]; then
+    echo "UNKNOWN: All parameters are required"
+    echo "Usage: $0 <token> <warning_threshold_sats> <critical_threshold_sats>"
+    exit 3
+fi
+
+# Vérification des dépendances
+if ! command -v curl &> /dev/null; then
+    echo "UNKNOWN: curl is required but not installed"
+    exit 3
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "UNKNOWN: jq is required but not installed"
+    exit 3
+fi
+
+# Récupération des données via l'API Braiins avec Pool-Auth-Token
+RESPONSE=$(curl -s -H "Pool-Auth-Token: $TOKEN" "$API_URL")
+
+# Vérification de la réponse HTTP
+if [ $? -ne 0 ]; then
+    echo "CRITICAL: Failed to connect to Braiins Pool API"
+    exit 2
+fi
+
+# Vérification si la réponse contient une erreur
+if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+    ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "Unknown error"')
+    echo "CRITICAL: API Error - $ERROR_MSG"
+    exit 2
+fi
+
+# Extraction du FPPS (Full Pay Per Share) directement depuis l'API
+FPPS=$(echo "$RESPONSE" | jq -r '.btc.fpps_rate // empty')
+
+if [ -z "$FPPS" ] || [ "$FPPS" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve FPPS from API response"
+    exit 3
+fi
+
+# Conversion en nombre pour comparaison (gestion de la notation scientifique)
+FPPS_NUM=$(echo "$FPPS" | sed 's/E/*10^/g' | bc -l 2>/dev/null || echo "$FPPS")
+
+# Conversion en sats (1 BTC = 100,000,000 sats) et arrondi à l'entier
+FPPS_SATS=$(echo "scale=0; $FPPS_NUM * 100000000" | bc -l | sed 's/\..*$//')
+
+# Détermination du statut (comparaison en sats)
+STATUS="OK"
+EXIT_CODE=0
+
+if (( $(echo "$FPPS_SATS <= $CRITICAL_THRESHOLD_SATS" | bc -l) )); then
+    STATUS="CRITICAL"
+    EXIT_CODE=2
+elif (( $(echo "$FPPS_SATS <= $WARNING_THRESHOLD_SATS" | bc -l) )); then
+    STATUS="WARNING"
+    EXIT_CODE=1
+fi
+
+# Affichage du résultat
+echo "$STATUS: Braiins Pool FPPS = $FPPS_SATS sats | fpps_sats=$FPPS_SATS"
+
+exit $EXIT_CODE 

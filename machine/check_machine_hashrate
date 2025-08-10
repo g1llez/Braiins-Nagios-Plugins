@@ -1,0 +1,63 @@
+#!/bin/bash
+
+# Get the current script path
+scriptPath=$(dirname $BASH_SOURCE[0])
+
+# Hashrate trigger
+HashWarning=$4
+HashCritical=$5
+
+Service="HASHRATE"
+
+# Authentification
+auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+
+# Check if we successfully authenticate
+retVal=$?
+if [[ $retVal -eq 0 ]]; then
+
+   # Get the current toker
+   token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
+   
+   # Get Nominal Hashrate
+   nominalhash=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState' | jq '.powerTargetModeState.profile.measuredHashrate.gigahashPerSecond')
+   nominalTH=$(printf "%.1f" $(echo "$nominalhash/1000" | bc -l))
+   
+   # Get the Hashboards info
+   boardsinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
+   
+   # Extract the hashrate for all the boards
+   b1_5m_hash=$(echo $boardsinfo | jq '.hashboards[0].stats.realHashrate.last5m.gigahashPerSecond' )
+   b2_5m_hash=$(echo $boardsinfo | jq '.hashboards[1].stats.realHashrate.last5m.gigahashPerSecond' )
+   b3_5m_hash=$(echo $boardsinfo | jq '.hashboards[2].stats.realHashrate.last5m.gigahashPerSecond' )
+   total_5m=$(echo ${b1_5m_hash} + ${b2_5m_hash} + ${b3_5m_hash} | bc)
+      
+   # Get value in TH
+   b1_5m_TH=$(printf "%.1f" $(echo "$b1_5m_hash/1000" | bc -l))
+   b2_5m_TH=$(printf "%.1f" $(echo "$b2_5m_hash/1000" | bc -l))
+   b3_5m_TH=$(printf "%.1f" $(echo "$b3_5m_hash/1000" | bc -l))
+   total_5m_TH=$(printf "%.1f" $(echo "$total_5m/1000" | bc -l))
+   
+   if [[ $hash == *"ERROR"* ]]; then
+      echo "$Service UNKNOWN - Error getting information"
+      retVal=3
+   else
+      # Return the informations
+	  status="OK"
+	  statusCode=0
+	  if [[ $b1_5m_TH < $HashCritical || $b2_5m_TH < $HashCritical || $b3_5m_TH < $HashCritical ]]; then
+	     status="CRITICAL"
+		 statusCode=2
+	  elif [[ ( $b1_5m_TH < $HashWarning ) || $b2_5m_TH < $HashWarning || $b3_5m_TH < $HashWarning ]]; then
+	     status="WARNING"
+		 statusCode=1
+	  fi
+      echo "$Service $status - [$b1_5m_TH,$b2_5m_TH,$b3_5m_TH], Total $total_5m_TH TH/s, Nominal $nominalTH TH/s| hashboard_1=$b1_5m_TH hashboard_2=$b2_5m_TH hashboard_3=$b3_5m_TH total_th=$total_5m_TH nominal_th=$nominalTH"
+      retVal=$statusCode
+   fi
+   
+else
+   echo "$Service UNKNOWN - Authentification failed for user '$2'"
+   retVal=3
+fi
+exit $retVal

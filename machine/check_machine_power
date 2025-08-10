@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Get the current script path
+scriptPath=$(dirname $BASH_SOURCE[0])
+
+# Temperature trigger
+powerWarning=$4
+powerCritical=$5
+
+Service="POWER"
+
+# Authentification
+auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+
+# Check if we successfully authenticate
+retVal=$?
+if [[ $retVal -eq 0 ]]; then
+
+   # Get the current toker
+   token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
+   
+   # Get the Performance info
+   info=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
+   
+   # Extract the power data
+   target=$(echo $info | jq '.powerTargetModeState.profile.target.watt' | tr -d '"')
+   watt=$(echo $info | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' | tr -d '"')
+   
+   if [[ $hash == *"ERROR"* ]]; then
+      echo "$Service UNKNOWN - Error getting power information"
+      retVal=3
+   else
+      # Return the informations
+	  status="OK"
+	  statusCode=0
+	  if [[ $watt > $powerCritical ]]; then
+	     status="CRITICAL"
+		 statusCode=2
+	  elif [[ ( $watt > $powerWarning ) ]]; then
+	     status="WARNING"
+		 statusCode=1
+	  fi
+      echo "$Service $status - Power usage: $watt Watts, Target: $target Watts | watt=$watt target=$target"
+      retVal=$statusCode
+   fi
+   
+else
+   echo "$Service UNKNOWN - Authentification failed for user '$2'"
+   retVal=3
+fi
+exit $retVal

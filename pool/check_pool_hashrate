@@ -1,0 +1,137 @@
+#!/bin/bash
+
+# Get the current script path
+scriptPath=$(dirname $BASH_SOURCE[0])
+
+# Function to format numbers with K, M, B suffixes
+format_number() {
+    local num=$1
+    if (( num >= 1000000000 )); then
+        printf "%.1fB" $(echo "scale=1; $num/1000000000" | bc -l)
+    elif (( num >= 1000000 )); then
+        printf "%.1fM" $(echo "scale=1; $num/1000000" | bc -l)
+    elif (( num >= 1000 )); then
+        printf "%.1fK" $(echo "scale=1; $num/1000" | bc -l)
+    else
+        echo "$num"
+    fi
+}
+
+# Hashrate trigger
+HashWarning=$3
+HashCritical=$4
+
+Service="BRAIINS_POOL"
+
+# Check if we have the required parameters
+if [[ $# -lt 4 ]]; then
+    echo "Usage: $0 <api_key> <metric_type> <warning_threshold> <critical_threshold>"
+    echo "Example: $0 'your_api_key' hashrate 25.0 20.0"
+    echo "Example: $0 'your_api_key' shares 1000 800"
+    exit 3
+fi
+
+# API Key and metric type from parameters
+API_KEY=$1
+METRIC_TYPE=$2
+
+# Construct the API URL
+API_URL="https://pool.braiins.com/accounts/profile/json/btc/"
+
+# Make the API request
+response=$(curl -s -H "Pool-Auth-Token: $API_KEY" "$API_URL")
+
+# Check if the request was successful
+if [[ $? -ne 0 ]]; then
+    echo "$Service UNKNOWN - Failed to connect to Braiins API"
+    exit 3
+fi
+
+# Check if response contains error
+if [[ $response == *"error"* ]] || [[ $response == *"Error"* ]]; then
+    echo "$Service UNKNOWN - API returned error: $response"
+    exit 3
+fi
+
+# Debug: Log the response (first 200 chars)
+echo "DEBUG: Response preview: ${response:0:200}..." >&2
+
+# Extract values using jq based on metric type
+username=$(echo "$response" | jq -r '.username' 2>/dev/null)
+echo "DEBUG: Username extracted: $username" >&2
+
+if [[ $METRIC_TYPE == "hashrate" ]]; then
+    # Extract hashrate values
+    hashrate_5m=$(echo "$response" | jq -r '.btc.hash_rate_5m' 2>/dev/null)
+    hashrate_60m=$(echo "$response" | jq -r '.btc.hash_rate_60m' 2>/dev/null)
+    hashrate_24h=$(echo "$response" | jq -r '.btc.hash_rate_24h' 2>/dev/null)
+    hash_rate_unit=$(echo "$response" | jq -r '.btc.hash_rate_unit' 2>/dev/null)
+    
+    echo "DEBUG: Hashrate values - 5m: $hashrate_5m, 60m: $hashrate_60m, 24h: $hashrate_24h, unit: $hash_rate_unit" >&2
+    
+    # Check if jq extraction was successful
+    if [[ $hashrate_5m == "null" ]] || [[ -z $hashrate_5m ]]; then
+        echo "$Service UNKNOWN - Failed to extract hashrate data from API response"
+        exit 3
+    fi
+elif [[ $METRIC_TYPE == "shares" ]]; then
+    # Extract shares values
+    shares_5m=$(echo "$response" | jq -r '.btc.shares_5m' 2>/dev/null)
+    shares_60m=$(echo "$response" | jq -r '.btc.shares_60m' 2>/dev/null)
+    shares_24h=$(echo "$response" | jq -r '.btc.shares_24h' 2>/dev/null)
+    
+    # Check if jq extraction was successful
+    if [[ $shares_5m == "null" ]] || [[ -z $shares_5m ]]; then
+        echo "$Service UNKNOWN - Failed to extract shares data from API response"
+        exit 3
+    fi
+else
+    echo "$Service UNKNOWN - Invalid metric type. Use 'hashrate' or 'shares'"
+    exit 3
+fi
+
+# Process values based on metric type
+if [[ $METRIC_TYPE == "hashrate" ]]; then
+    # Convert to TH/s if the unit is Gh/s
+    if [[ $hash_rate_unit == "Gh/s" ]]; then
+        hashrate_5m_th=$(printf "%.1f" $(echo "$hashrate_5m/1000" | bc -l))
+        hashrate_60m_th=$(printf "%.1f" $(echo "$hashrate_60m/1000" | bc -l))
+        hashrate_24h_th=$(printf "%.1f" $(echo "$hashrate_24h/1000" | bc -l))
+        unit_display="TH/s"
+    else
+        hashrate_5m_th=$hashrate_5m
+        hashrate_60m_th=$hashrate_60m
+        hashrate_24h_th=$hashrate_24h
+        unit_display=$hash_rate_unit
+    fi
+    # Use 60m for threshold comparison
+    current_value=$hashrate_60m_th
+elif [[ $METRIC_TYPE == "shares" ]]; then
+    # Use 60m for threshold comparison
+    current_value=$shares_60m
+fi
+
+# Determine status based on thresholds
+status="OK"
+statusCode=0
+
+if (( $(echo "$current_value < $HashCritical" | bc -l) )); then
+    status="CRITICAL"
+    statusCode=2
+elif (( $(echo "$current_value < $HashWarning" | bc -l) )); then
+    status="WARNING"
+    statusCode=1
+fi
+
+# Return the information based on metric type (format simple)
+if [[ $METRIC_TYPE == "hashrate" ]]; then
+    echo "$Service $status - User: $username, 5m: $hashrate_5m_th $unit_display, 60m: $hashrate_60m_th $unit_display, 24h: $hashrate_24h_th $unit_display | hashrate_5m=$hashrate_5m_th hashrate_60m=$hashrate_60m_th hashrate_24h=$hashrate_24h_th"
+elif [[ $METRIC_TYPE == "shares" ]]; then
+    # Format shares for display
+    shares_5m_formatted=$(format_number $shares_5m)
+    shares_60m_formatted=$(format_number $shares_60m)
+    shares_24h_formatted=$(format_number $shares_24h)
+    echo "$Service $status - User: $username, 5m: $shares_5m_formatted shares, 60m: $shares_60m_formatted shares, 24h: $shares_24h_formatted shares | shares_5m=$shares_5m shares_60m=$shares_60m shares_24h=$shares_24h"
+fi
+
+exit $statusCode 
