@@ -36,7 +36,6 @@ fi
 
 # 1. Récupération des données de power depuis la machine
 auth=$(grpcurl -plaintext -v -d  '{"username": "'$USERNAME'", "password": "'$PASSWORD'"}' $HOST_ADDRESS:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
-auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$USERNAME'", "password": "'$PASSWORD'"}' $HOST_ADDRESS:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
 
 # Vérification de l'authentification
 if [ $? -ne 0 ]; then
@@ -49,7 +48,6 @@ token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
 
 # Récupération des données de power
 power_info=$(grpcurl -plaintext -H 'authorization:'$token'' $HOST_ADDRESS:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
-power_info=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $HOST_ADDRESS:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
 
 # Extraction de la consommation électrique
 watt=$(echo $power_info | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' | tr -d '"')

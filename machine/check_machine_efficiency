@@ -11,7 +11,6 @@ Service="EFFICIENCY"
 
 # Authentification
 auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
-auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
 
 # Check if we successfully authenticate
 retVal=$?
@@ -23,8 +22,6 @@ if [[ $retVal -eq 0 ]]; then
    # Get the Performance and Tuner info
    tunerinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
    boardsinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
-   tunerinfo=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
-   boardsinfo=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
    
    # Extract the hashrate for all the boards
    b1_5m_hash=$(echo $boardsinfo | jq '.hashboards[0].stats.realHashrate.last5m.gigahashPerSecond' )

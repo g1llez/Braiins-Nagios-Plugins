@@ -11,7 +11,6 @@ Service="POWER"
 
 # Authentification
 auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
-auth=$($scriptPath/grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
 
 # Check if we successfully authenticate
 retVal=$?
@@ -22,7 +21,6 @@ if [[ $retVal -eq 0 ]]; then
    
    # Get the Performance info
    info=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
-   info=$($scriptPath/grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
    
    # Extract the power data
    target=$(echo $info | jq '.powerTargetModeState.profile.target.watt' | tr -d '"')
