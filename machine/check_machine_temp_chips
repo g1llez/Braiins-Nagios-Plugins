@@ -3,11 +3,18 @@
 # Get the current script path
 scriptPath=$(dirname $BASH_SOURCE[0])
 
-# Temperature trigger
-tempWarning=$4
-tempCritical=$5
+# Check if we have all required parameters
+if [[ $# -lt 5 ]]; then
+    echo "Usage: $0 <ip> <username> <password> <warning_threshold> <machine_type_id>"
+    echo "Example: $0 192.168.1.100 root password 85 1"
+    exit 3
+fi
 
-Service="TEMP"
+# Temperature trigger
+TempWarning=$4
+MachineTypeID=$5
+
+Service="CHIPS TEMP"
 
 # Authentification
 auth=$(grpcurl -plaintext -v -d  '{"username": "'$2'", "password": "'$3'"}' $1:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
@@ -27,21 +34,47 @@ if [[ $retVal -eq 0 ]]; then
    b2_highestChipTemp=$(echo $info | jq '.hashboards[1].highestChipTemp.temperature.degreeC' )
    b3_highestChipTemp=$(echo $info | jq '.hashboards[2].highestChipTemp.temperature.degreeC' )
    
-   if [[ $hash == *"ERROR"* ]]; then
-      echo "$Service UNKNOWN - Error getting power information"
+   # Replace null or empty values with "U" (Unknown)
+   [[ "$b1_highestChipTemp" == "null" || -z "$b1_highestChipTemp" ]] && b1_highestChipTemp="U"
+   [[ "$b2_highestChipTemp" == "null" || -z "$b2_highestChipTemp" ]] && b2_highestChipTemp="U"
+   [[ "$b3_highestChipTemp" == "null" || -z "$b3_highestChipTemp" ]] && b3_highestChipTemp="U"
+   
+   # Calculate highest chip temperature if any board is available
+   if [[ "$b1_highestChipTemp" != "U" && "$b2_highestChipTemp" != "U" && "$b3_highestChipTemp" != "U" ]]; then
+      highest_temp=$(echo "$b1_highestChipTemp $b2_highestChipTemp $b3_highestChipTemp" | tr ' ' '\n' | sort -n | tail -1)
+   elif [[ "$b1_highestChipTemp" != "U" && "$b2_highestChipTemp" != "U" ]]; then
+      highest_temp=$(echo "$b1_highestChipTemp $b2_highestChipTemp" | tr ' ' '\n' | sort -n | tail -1)
+   elif [[ "$b1_highestChipTemp" != "U" ]]; then
+      highest_temp="$b1_highestChipTemp"
+   elif [[ "$b2_highestChipTemp" != "U" ]]; then
+      highest_temp="$b2_highestChipTemp"
+   elif [[ "$b3_highestChipTemp" != "U" ]]; then
+      highest_temp="$b3_highestChipTemp"
+   else
+      highest_temp="U"
+   fi
+   
+   if [[ "$b1_highestChipTemp" == "U" && "$b2_highestChipTemp" == "U" && "$b3_highestChipTemp" == "U" ]]; then
+      echo "$Service UNKNOWN - Error getting temperature information"
       retVal=3
    else
       # Return the informations
 	  status="OK"
 	  statusCode=0
-	  if [[ $b1_highestChipTemp > $tempCritical || $b2_highestChipTemp > $tempCritical || $b3_highestChipTemp > $tempCritical ]]; then
+	  
+	  # Check if machine is down (all temperatures are U)
+	  if [[ "$highest_temp" == "U" ]]; then
 	     status="CRITICAL"
 		 statusCode=2
-	  elif [[ ( $b1_highestChipTemp > $tempWarning ) || $b2_highestChipTemp > $tempWarning || $b3_highestChipTemp > $tempWarning ]]; then
+	     echo "$Service $status - Machine éteinte ou données indisponibles | temp_chip_board_1=$b1_highestChipTemp temp_chip_board_2=$b2_highestChipTemp temp_chip_board_3=$b3_highestChipTemp highest_temp=$highest_temp machine_type_id=$MachineTypeID"
+	  # Check temperatures only if they are numeric (not "U")
+	  elif [[ "$highest_temp" != "U" && "$highest_temp" =~ ^[0-9.]+$ && $(echo "$highest_temp > $TempWarning" | bc -l) -eq 1 ]]; then
 	     status="WARNING"
 		 statusCode=1
+	     echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp], Max: $highest_temp °C | temp_chip_board_1=$b1_highestChipTemp temp_chip_board_2=$b2_highestChipTemp temp_chip_board_3=$b3_highestChipTemp highest_temp=$highest_temp machine_type_id=$MachineTypeID"
+	  else
+	     echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp], Max: $highest_temp °C | temp_chip_board_1=$b1_highestChipTemp temp_chip_board_2=$b2_highestChipTemp temp_chip_board_3=$b3_highestChipTemp highest_temp=$highest_temp machine_type_id=$MachineTypeID"
 	  fi
-      echo "$Service $status - Highest Chips: [$b1_highestChipTemp,$b2_highestChipTemp,$b3_highestChipTemp] | temp_chip_board_1=$b1_highestChipTemp temp_chip_board_2=$b2_highestChipTemp temp_chip_board_3=$b3_highestChipTemp"
       retVal=$statusCode
    fi
    

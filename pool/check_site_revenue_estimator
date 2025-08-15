@@ -1,0 +1,377 @@
+#!/bin/bash
+
+# -----------------------------------------------------------------------------
+# Nagios Plugin : check_revenue_estimator
+#
+# Estime les revenus, coûts et profits d'un site de minage Bitcoin
+# en utilisant les données des autres plugins Nagios et les paliers Hydro-Québec
+#
+# Formule de revenus : Hashrate (TH/s) × FPPS (BTC/jour/TH/s) × Prix Bitcoin ($)
+# Paliers Hydro-Québec : 40 kWh à 0.07708$, reste à 0.11891$ (journaliers)
+#
+# Retourne 9 métriques : revenus réels 5m/60m/24h, coûts réels 5m/60m/24h, profits réels 5m/60m/24h
+# -----------------------------------------------------------------------------
+
+# Variables de service
+Service="REVENUE_ESTIMATOR"
+
+# Paramètres
+if [[ $# -lt 9 ]]; then
+    echo "Usage: $0 <pool_api_key> <machine_ips> <machine_user> <machine_password> <warning_threshold> <critical_threshold> <hydro_tier1_kwh> <hydro_tier1_rate> <hydro_tier2_rate>"
+    echo "Example: $0 'your_pool_api_key' '192.168.1.100,192.168.1.101' 'root' 'password' 100 50 40 0.07708 0.11891"
+    echo "Machine IPs can be separated by commas for multiple machines per site"
+    echo "Warning/Critical thresholds are for profit margin in %"
+    echo "Hydro rates are daily rates in CAD/kWh"
+    exit 3
+fi
+
+POOL_API_KEY=$1
+MACHINE_IPS=$2
+MACHINE_USER=$3
+MACHINE_PASSWORD=$4
+WARNING_THRESHOLD=$5
+CRITICAL_THRESHOLD=$6
+HYDRO_TIER1_KWH=$7
+HYDRO_TIER1_RATE=$8
+HYDRO_TIER2_RATE=$9
+
+# Conversion des IPs en tableau
+IFS=',' read -ra MACHINE_IP_ARRAY <<< "$MACHINE_IPS"
+
+# Vérification des dépendances
+if ! command -v curl &> /dev/null; then
+    echo "$Service UNKNOWN - curl is required but not installed"
+    exit 3
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "$Service UNKNOWN - jq is required but not installed"
+    exit 3
+fi
+
+if ! command -v bc &> /dev/null; then
+    echo "$Service UNKNOWN - bc is required but not installed"
+    exit 3
+fi
+
+# Fonction pour récupérer le hashrate depuis l'API Braiins
+get_hashrate() {
+    local api_key=$1
+    local api_url="https://pool.braiins.com/accounts/profile/json/btc/"
+    
+    local response=$(curl -s -H "Pool-Auth-Token: $api_key" "$api_url")
+    
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    if [[ $response == *"error"* ]] || [[ $response == *"Error"* ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    # Extraction des valeurs de hashrate
+    local hashrate_5m=$(echo "$response" | jq -r '.btc.hash_rate_5m' 2>/dev/null)
+    local hashrate_60m=$(echo "$response" | jq -r '.btc.hash_rate_60m' 2>/dev/null)
+    local hashrate_24h=$(echo "$response" | jq -r '.btc.hash_rate_24h' 2>/dev/null)
+    local hash_rate_unit=$(echo "$response" | jq -r '.btc.hash_rate_unit' 2>/dev/null)
+    
+    if [[ $hashrate_5m == "null" ]] || [[ -z $hashrate_5m ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    # Conversion en TH/s si nécessaire
+    if [[ $hash_rate_unit == "Gh/s" ]]; then
+        hashrate_5m=$(echo "scale=3; $hashrate_5m/1000" | bc -l)
+        hashrate_60m=$(echo "scale=3; $hashrate_60m/1000" | bc -l)
+        hashrate_24h=$(echo "scale=3; $hashrate_24h/1000" | bc -l)
+    fi
+    
+    echo "$hashrate_5m:$hashrate_60m:$hashrate_24h"
+}
+
+# Fonction pour récupérer le FPPS depuis l'API Braiins
+get_fpps() {
+    local api_key=$1
+    local api_url="https://pool.braiins.com/stats/json/btc"
+    
+    local response=$(curl -s -H "Pool-Auth-Token: $api_key" "$api_url")
+    
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    if echo "$response" | jq -e '.error' > /dev/null 2>&1; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    # Récupération du FPPS brut en BTC/jour/TH/s
+    local fpps=$(echo "$response" | jq -r '.btc.fpps_rate // empty')
+    
+    if [[ -z "$fpps" ]] || [[ "$fpps" = "null" ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    # Gestion de la notation scientifique si nécessaire
+    local fpps_num=$(echo "$fpps" | sed 's/E/*10^/g' | bc -l 2>/dev/null || echo "$fpps")
+    
+    echo "$fpps_num"
+}
+
+# Fonction pour récupérer le prix Bitcoin depuis CoinGecko
+get_bitcoin_price() {
+    # Récupération du prix en CAD directement depuis CoinGecko
+    local response=$(curl -s --max-time 10 "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=cad")
+    
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    # Vérification de la validité de la réponse
+    if [[ -z "$response" ]] || [[ "$response" == "null" ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    # Extraction du prix CAD
+    local price_cad=$(echo "$response" | jq -r '.bitcoin.cad // empty' 2>/dev/null)
+    
+    # Validation du prix
+    if [[ -z "$price_cad" ]] || [[ "$price_cad" == "null" ]] || [[ "$price_cad" == "0" ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    # Vérification que le prix est réaliste (entre 1000$ et 1000000$ CAD)
+    if (( $(echo "$price_cad < 1000" | bc -l) )) || (( $(echo "$price_cad > 1000000" | bc -l) )); then
+        echo "ERROR"
+        return 1
+    fi
+    
+    echo "$price_cad"
+}
+
+# Fonction pour récupérer la consommation électrique
+get_power_consumption() {
+    local machine_ip=$1
+    local machine_user=$2
+    local machine_password=$3
+    
+    # Utilise grpcurl pour récupérer la consommation électrique
+    local auth=$(grpcurl -plaintext -v -d '{"username": "'$machine_user'", "password": "'$machine_password'"}' $machine_ip:50051 'braiins.bos.v1.AuthenticationService/Login' 2>/dev/null)
+    
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    local token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
+    
+    if [[ -z "$token" ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    local info=$(grpcurl -plaintext -H 'authorization:'$token'' $machine_ip:50051 'braiins.bos.v1.PerformanceService/GetTunerState' 2>&1)
+    
+    # Vérifier si BOSminer n'est pas en cours d'exécution
+    if echo "$info" | grep -q "BOSminer is not running"; then
+        echo "BOSMINER_STOPPED"
+        return 1
+    fi
+    
+    # Vérifier si la requête a échoué
+    if [[ $? -ne 0 ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    local watt=$(echo $info | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' 2>/dev/null | tr -d '"')
+    
+    if [[ "$watt" == "null" ]] || [[ -z "$watt" ]]; then
+        echo "ERROR"
+        return 1
+    fi
+    
+    echo "$watt"
+}
+
+# Fonction pour calculer le coût électrique par période
+calculate_period_electric_cost() {
+    local power_watts=$1
+    local period_minutes=$2
+    
+    # Conversion en kWh pour la période
+    local period_kwh=$(echo "scale=6; $power_watts * $period_minutes / 60 / 1000" | bc -l)
+    
+    # Pour les paliers Hydro-Québec, on calcule proportionnellement
+    # Note: Les paliers sont journaliers, donc on applique la proportion
+    local daily_kwh=$(echo "scale=3; $power_watts * 24 / 1000" | bc -l)
+    local period_ratio=$(echo "scale=8; $period_minutes / 1440" | bc -l)
+    
+    local cost=0
+    
+    if (( $(echo "$daily_kwh <= $HYDRO_TIER1_KWH" | bc -l) )); then
+        # Tout au premier palier
+        cost=$(echo "scale=4; $period_kwh * $HYDRO_TIER1_RATE" | bc -l)
+    else
+        # Calcul proportionnel des paliers
+        local daily_tier1_cost=$(echo "scale=2; $HYDRO_TIER1_KWH * $HYDRO_TIER1_RATE" | bc -l)
+        local daily_tier2_kwh=$(echo "scale=3; $daily_kwh - $HYDRO_TIER1_KWH" | bc -l)
+        local daily_tier2_cost=$(echo "scale=2; $daily_tier2_kwh * $HYDRO_TIER2_RATE" | bc -l)
+        local daily_total_cost=$(echo "scale=2; $daily_tier1_cost + $daily_tier2_cost" | bc -l)
+        
+        # Coût proportionnel à la période
+        cost=$(echo "scale=4; $daily_total_cost * $period_ratio" | bc -l)
+    fi
+    
+    echo "$cost"
+}
+
+# Fonction pour calculer les revenus par période (réels, pas extrapolés)
+calculate_period_revenue() {
+    local hashrate_th=$1
+    local fpps_btc=$2
+    local btc_price_cad=$3
+    local period_minutes=$4
+    
+    # FPPS est en BTC/jour/TH/s, on calcule pour la période réelle
+    # 1 jour = 1440 minutes
+    local period_ratio=$(echo "scale=8; $period_minutes / 1440" | bc -l)
+    local period_btc=$(echo "scale=8; $hashrate_th * $fpps_btc * $period_ratio" | bc -l)
+    local period_revenue_cad=$(echo "scale=4; $period_btc * $btc_price_cad" | bc -l)
+    
+    echo "$period_revenue_cad"
+}
+
+# Récupération des données
+echo "Récupération des données..." >&2
+
+# Hashrate (5m, 60m, 24h)
+hashrate_data=$(get_hashrate "$POOL_API_KEY")
+if [[ $hashrate_data == "ERROR" ]]; then
+    echo "$Service UNKNOWN - Impossible de récupérer le hashrate"
+    exit 3
+fi
+
+hashrate_5m=$(echo "$hashrate_data" | cut -d: -f1)
+hashrate_60m=$(echo "$hashrate_data" | cut -d: -f2)
+hashrate_24h=$(echo "$hashrate_data" | cut -d: -f3)
+
+# FPPS
+fpps=$(get_fpps "$POOL_API_KEY")
+if [[ $fpps == "ERROR" ]]; then
+    echo "$Service UNKNOWN - Impossible de récupérer le FPPS"
+    exit 3
+fi
+
+# Prix Bitcoin (CAD)
+btc_price_cad=$(get_bitcoin_price)
+if [[ $btc_price_cad == "ERROR" ]]; then
+    echo "$Service UNKNOWN - Impossible de récupérer le prix Bitcoin"
+    exit 3
+fi
+
+# Consommation électrique totale (Watts) pour toutes les machines
+total_power_watts=0
+active_machines=0
+error_machines=0
+machine_details=""
+error_details=""
+
+for machine_ip in "${MACHINE_IP_ARRAY[@]}"; do
+    echo "Récupération de la consommation pour $machine_ip..." >&2
+    power_watts=$(get_power_consumption "$machine_ip" "$MACHINE_USER" "$MACHINE_PASSWORD")
+    
+    if [[ $power_watts == "ERROR" ]]; then
+        error_machines=$((error_machines + 1))
+        error_details+="$machine_ip:ERROR "
+        echo "Machine $machine_ip: ERREUR de connexion" >&2
+        continue
+    elif [[ $power_watts == "BOSMINER_STOPPED" ]]; then
+        echo "Machine $machine_ip: BOSminer arrêté" >&2
+        machine_details+="$machine_ip:STOPPED "
+        continue
+    else
+        total_power_watts=$(echo "scale=2; $total_power_watts + $power_watts" | bc -l)
+        active_machines=$((active_machines + 1))
+        machine_details+="$machine_ip:${power_watts}W "
+        echo "Machine $machine_ip: ${power_watts}W" >&2
+    fi
+done
+
+# Si TOUTES les machines ont des erreurs, on retourne UNKNOWN
+if [[ $active_machines -eq 0 ]] && [[ $error_machines -gt 0 ]]; then
+    echo "$Service UNKNOWN - Aucune machine accessible: $error_details"
+    exit 3
+elif [[ $active_machines -eq 0 ]]; then
+    echo "$Service UNKNOWN - Aucune machine active trouvée"
+    exit 3
+fi
+
+echo "Total: ${active_machines} machines actives, ${total_power_watts}W" >&2
+if [[ $error_machines -gt 0 ]]; then
+    echo "Attention: ${error_machines} machines en erreur: $error_details" >&2
+fi
+
+# Calculs
+echo "Calculs en cours..." >&2
+
+# Revenus réels (CAD) pour chaque période
+revenue_5m=$(calculate_period_revenue "$hashrate_5m" "$fpps" "$btc_price_cad" 5)
+revenue_60m=$(calculate_period_revenue "$hashrate_60m" "$fpps" "$btc_price_cad" 60)
+revenue_24h=$(calculate_period_revenue "$hashrate_24h" "$fpps" "$btc_price_cad" 1440)
+
+# Coûts électriques réels (CAD) pour chaque période
+cost_5m=$(calculate_period_electric_cost "$total_power_watts" 5)
+cost_60m=$(calculate_period_electric_cost "$total_power_watts" 60)
+cost_24h=$(calculate_period_electric_cost "$total_power_watts" 1440)
+
+# Profits réels (CAD) pour chaque période
+profit_5m=$(echo "scale=4; $revenue_5m - $cost_5m" | bc -l)
+profit_60m=$(echo "scale=4; $revenue_60m - $cost_60m" | bc -l)
+profit_24h=$(echo "scale=4; $revenue_24h - $cost_24h" | bc -l)
+
+# Calcul du pourcentage de profit (basé sur 60m pour la comparaison des seuils)
+profit_percentage=0
+if (( $(echo "$revenue_60m > 0" | bc -l) )); then
+    profit_percentage=$(echo "scale=1; $profit_60m / $revenue_60m * 100" | bc -l)
+fi
+
+# Détermination du statut
+status="OK"
+statusCode=0
+
+if (( $(echo "$profit_percentage <= $CRITICAL_THRESHOLD" | bc -l) )); then
+    status="CRITICAL"
+    statusCode=2
+elif (( $(echo "$profit_percentage <= $WARNING_THRESHOLD" | bc -l) )); then
+    status="WARNING"
+    statusCode=1
+fi
+
+# Formatage des nombres pour l'affichage
+format_currency() {
+    local value=$1
+    printf "%.2f" "$value"
+}
+
+# Construction du message
+if [[ $error_machines -gt 0 ]]; then
+    msg="$Service $status - Profit 60m: $(format_currency $profit_60m)$ CAD, 24h: $(format_currency $profit_24h)$ CAD (${profit_percentage}%) [${active_machines}/${#MACHINE_IP_ARRAY[@]} machines: ${total_power_watts}W, ${error_machines} errors] | "
+else
+    msg="$Service $status - Profit 60m: $(format_currency $profit_60m)$ CAD, 24h: $(format_currency $profit_24h)$ CAD (${profit_percentage}%) [${active_machines} machines: ${total_power_watts}W] | "
+fi
+msg+="revenue_5m=$(format_currency $revenue_5m) revenue_60m=$(format_currency $revenue_60m) revenue_24h=$(format_currency $revenue_24h) "
+msg+="cost_5m=$(format_currency $cost_5m) cost_60m=$(format_currency $cost_60m) cost_24h=$(format_currency $cost_24h) "
+msg+="profit_5m=$(format_currency $profit_5m) profit_60m=$(format_currency $profit_60m) profit_24h=$(format_currency $profit_24h) "
+msg+="profit_pct=${profit_percentage} active_machines=${active_machines} total_power=${total_power_watts} error_machines=${error_machines}"
+
+echo "$msg"
+exit $statusCode

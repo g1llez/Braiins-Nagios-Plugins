@@ -3,9 +3,17 @@
 # Get the current script path
 scriptPath=$(dirname $BASH_SOURCE[0])
 
+# Check if we have all required parameters
+if [[ $# -lt 6 ]]; then
+    echo "Usage: $0 <ip> <username> <password> <warning_threshold> <critical_threshold> <machine_type_id>"
+    echo "Example: $0 192.168.1.100 root password 100 90 1"
+    exit 3
+fi
+
 # Hashrate trigger
 HashWarning=$4
 HashCritical=$5
+MachineTypeID=$6
 
 Service="HASHRATE"
 
@@ -20,23 +28,42 @@ if [[ $retVal -eq 0 ]]; then
    token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
    
    # Get Nominal Hashrate
-   nominalhash=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState' | jq '.powerTargetModeState.profile.measuredHashrate.gigahashPerSecond')
-   nominalTH=$(printf "%.1f" $(echo "$nominalhash/1000" | bc -l))
+   nominalhash=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState' 2>/dev/null | jq '.powerTargetModeState.profile.measuredHashrate.gigahashPerSecond' 2>/dev/null)
    
    # Get the Hashboards info
-   boardsinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
+   boardsinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards' 2>/dev/null)
    
    # Extract the hashrate for all the boards
-   b1_5m_hash=$(echo $boardsinfo | jq '.hashboards[0].stats.realHashrate.last5m.gigahashPerSecond' )
-   b2_5m_hash=$(echo $boardsinfo | jq '.hashboards[1].stats.realHashrate.last5m.gigahashPerSecond' )
-   b3_5m_hash=$(echo $boardsinfo | jq '.hashboards[2].stats.realHashrate.last5m.gigahashPerSecond' )
-   total_5m=$(echo ${b1_5m_hash} + ${b2_5m_hash} + ${b3_5m_hash} | bc)
-      
-   # Get value in TH
-   b1_5m_TH=$(printf "%.1f" $(echo "$b1_5m_hash/1000" | bc -l))
-   b2_5m_TH=$(printf "%.1f" $(echo "$b2_5m_hash/1000" | bc -l))
-   b3_5m_TH=$(printf "%.1f" $(echo "$b3_5m_hash/1000" | bc -l))
-   total_5m_TH=$(printf "%.1f" $(echo "$total_5m/1000" | bc -l))
+   b1_5m_hash=$(echo $boardsinfo | jq '.hashboards[0].stats.realHashrate.last5m.gigahashPerSecond' 2>/dev/null)
+   b2_5m_hash=$(echo $boardsinfo | jq '.hashboards[1].stats.realHashrate.last5m.gigahashPerSecond' 2>/dev/null)
+   b3_5m_hash=$(echo $boardsinfo | jq '.hashboards[2].stats.realHashrate.last5m.gigahashPerSecond' 2>/dev/null)
+   
+   # Replace null or empty values with "U" (Unknown)
+   [[ "$nominalhash" == "null" || -z "$nominalhash" ]] && nominalhash="U"
+   [[ "$b1_5m_hash" == "null" || -z "$b1_5m_hash" ]] && b1_5m_hash="U"
+   [[ "$b2_5m_hash" == "null" || -z "$b2_5m_hash" ]] && b2_5m_hash="U"
+   [[ "$b3_5m_hash" == "null" || -z "$b3_5m_hash" ]] && b3_5m_hash="U"
+   
+   # Calculate values only if data is available
+   if [[ "$nominalhash" != "U" ]]; then
+      nominalTH=$(printf "%.1f" $(echo "$nominalhash/1000" | bc -l))
+   else
+      nominalTH="U"
+   fi
+   
+   if [[ "$b1_5m_hash" != "U" && "$b2_5m_hash" != "U" && "$b3_5m_hash" != "U" ]]; then
+      total_5m=$(echo ${b1_5m_hash} + ${b2_5m_hash} + ${b3_5m_hash} | bc)
+      # Get value in TH
+      b1_5m_TH=$(printf "%.1f" $(echo "$b1_5m_hash/1000" | bc -l))
+      b2_5m_TH=$(printf "%.1f" $(echo "$b2_5m_hash/1000" | bc -l))
+      b3_5m_TH=$(printf "%.1f" $(echo "$b3_5m_hash/1000" | bc -l))
+      total_5m_TH=$(printf "%.1f" $(echo "$total_5m/1000" | bc -l))
+   else
+      b1_5m_TH="U"
+      b2_5m_TH="U" 
+      b3_5m_TH="U"
+      total_5m_TH="U"
+   fi
    
    if [[ $hash == *"ERROR"* ]]; then
       echo "$Service UNKNOWN - Error getting information"
@@ -45,14 +72,24 @@ if [[ $retVal -eq 0 ]]; then
       # Return the informations
 	  status="OK"
 	  statusCode=0
-	  if [[ $b1_5m_TH < $HashCritical || $b2_5m_TH < $HashCritical || $b3_5m_TH < $HashCritical ]]; then
+	  
+	  # Check if machine is down (all hashrates are U)
+	  if [[ "$b1_5m_TH" == "U" && "$b2_5m_TH" == "U" && "$b3_5m_TH" == "U" ]]; then
 	     status="CRITICAL"
 		 statusCode=2
-	  elif [[ ( $b1_5m_TH < $HashWarning ) || $b2_5m_TH < $HashWarning || $b3_5m_TH < $HashWarning ]]; then
+	     echo "$Service $status - Machine éteinte ou données indisponibles | hashboard_1=$b1_5m_TH hashboard_2=$b2_5m_TH hashboard_3=$b3_5m_TH total_th=$total_5m_TH nominal_th=$nominalTH machine_type_id=$MachineTypeID"
+	  # Check hashrates only if they are numeric (not "U")
+	  elif [[ "$total_5m_TH" != "U" && "$total_5m_TH" =~ ^[0-9.]+$ && $(echo "$total_5m_TH < $HashCritical" | bc -l) -eq 1 ]]; then
+	     status="CRITICAL"
+		 statusCode=2
+	     echo "$Service $status - [$b1_5m_TH,$b2_5m_TH,$b3_5m_TH], Total $total_5m_TH TH/s, Nominal $nominalTH TH/s| hashboard_1=$b1_5m_TH hashboard_2=$b2_5m_TH hashboard_3=$b3_5m_TH total_th=$total_5m_TH nominal_th=$nominalTH machine_type_id=$MachineTypeID"
+	  elif [[ "$total_5m_TH" != "U" && "$total_5m_TH" =~ ^[0-9.]+$ && $(echo "$total_5m_TH < $HashWarning" | bc -l) -eq 1 ]]; then
 	     status="WARNING"
 		 statusCode=1
+	     echo "$Service $status - [$b1_5m_TH,$b2_5m_TH,$b3_5m_TH], Total $total_5m_TH TH/s, Nominal $nominalTH TH/s| hashboard_1=$b1_5m_TH hashboard_2=$b2_5m_TH hashboard_3=$b3_5m_TH total_th=$total_5m_TH nominal_th=$nominalTH machine_type_id=$MachineTypeID"
+	  else
+	     echo "$Service $status - [$b1_5m_TH,$b2_5m_TH,$b3_5m_TH], Total $total_5m_TH TH/s, Nominal $nominalTH TH/s| hashboard_1=$b1_5m_TH hashboard_2=$b2_5m_TH hashboard_3=$b3_5m_TH total_th=$total_5m_TH nominal_th=$nominalTH machine_type_id=$MachineTypeID"
 	  fi
-      echo "$Service $status - [$b1_5m_TH,$b2_5m_TH,$b3_5m_TH], Total $total_5m_TH TH/s, Nominal $nominalTH TH/s| hashboard_1=$b1_5m_TH hashboard_2=$b2_5m_TH hashboard_3=$b3_5m_TH total_th=$total_5m_TH nominal_th=$nominalTH"
       retVal=$statusCode
    fi
    

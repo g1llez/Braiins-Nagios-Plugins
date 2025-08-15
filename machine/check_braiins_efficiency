@@ -13,13 +13,14 @@ PASSWORD=${3}
 BRAIINS_TOKEN=${4}
 WARNING_THRESHOLD=${5}
 CRITICAL_THRESHOLD=${6}
+MACHINE_TYPE_ID=${7}
 
 Service="BRAIINS_EFFICIENCY"
 
 # Vérification des paramètres
-if [ -z "$HOST_ADDRESS" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ] || [ -z "$BRAIINS_TOKEN" ] || [ -z "$WARNING_THRESHOLD" ] || [ -z "$CRITICAL_THRESHOLD" ]; then
+if [ -z "$HOST_ADDRESS" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ] || [ -z "$BRAIINS_TOKEN" ] || [ -z "$WARNING_THRESHOLD" ] || [ -z "$CRITICAL_THRESHOLD" ] || [ -z "$MACHINE_TYPE_ID" ]; then
     echo "UNKNOWN: All parameters are required"
-    echo "Usage: $0 <host_address> <username> <password> <braiins_token> <warning_threshold> <critical_threshold>"
+    echo "Usage: $0 <host_address> <username> <password> <braiins_token> <warning_threshold> <critical_threshold> <machine_type_id>"
     exit 3
 fi
 
@@ -47,13 +48,20 @@ fi
 token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
 
 # Récupération des données de power
-power_info=$(grpcurl -plaintext -H 'authorization:'$token'' $HOST_ADDRESS:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
+power_info=$(grpcurl -plaintext -H 'authorization:'$token'' $HOST_ADDRESS:50051 'braiins.bos.v1.PerformanceService/GetTunerState' 2>/dev/null)
 
 # Extraction de la consommation électrique
-watt=$(echo $power_info | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' | tr -d '"')
+watt=$(echo $power_info | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' 2>/dev/null | tr -d '"')
 
-if [ -z "$watt" ] || [ "$watt" = "null" ] || [ "$watt" = "0" ]; then
-    echo "UNKNOWN: Could not retrieve power consumption from machine"
+# Vérifier si la machine est éteinte ou les données sont indisponibles
+if [ -z "$watt" ] || [ "$watt" = "null" ]; then
+    echo "CRITICAL: Machine éteinte ou données indisponibles | efficiency=U"
+    exit 2
+fi
+
+# Si watt est 0, c'est aussi un problème
+if [ "$watt" = "0" ]; then
+    echo "UNKNOWN: Power consumption is zero"
     exit 3
 fi
 
@@ -128,6 +136,6 @@ elif (( $(echo "$EFFICIENCY <= $WARNING_THRESHOLD" | bc -l) )); then
 fi
 
 # Affichage du résultat
-echo "$STATUS: Braiins Efficiency = $EFFICIENCY sats/W/H (User: $USERNAME_POOL, Hashrate: ${HASHRATE_60M_TH}TH/s, Power: ${watt}W, Reward: ${ESTIMATED_HOURLY_REWARD}sats/h) | efficiency=$EFFICIENCY"
+echo "$STATUS: Braiins Efficiency = $EFFICIENCY sats/W/H (User: $USERNAME_POOL, Hashrate: ${HASHRATE_60M_TH}TH/s, Power: ${watt}W, Reward: ${ESTIMATED_HOURLY_REWARD}sats/h) | efficiency=$EFFICIENCY machine_type_id=$MACHINE_TYPE_ID"
 
 exit $EXIT_CODE 

@@ -3,9 +3,16 @@
 # Get the current script path
 scriptPath=$(dirname $BASH_SOURCE[0])
 
-# Temperature trigger
-effWarning=$4
-effCritical=$5
+# Check if we have all required parameters
+if [[ $# -lt 5 ]]; then
+    echo "Usage: $0 <ip> <username> <password> <warning_threshold> <machine_type_id>"
+    echo "Example: $0 192.168.1.100 root password 25 1"
+    exit 3
+fi
+
+# Efficiency trigger
+EfficiencyWarning=$4
+MachineTypeID=$5
 
 Service="EFFICIENCY"
 
@@ -20,37 +27,55 @@ if [[ $retVal -eq 0 ]]; then
    token=$(echo -e "$auth" | grep 'authorization:' | awk '{print $2}')
    
    # Get the Performance and Tuner info
-   tunerinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState')
-   boardsinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards')
+   tunerinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.PerformanceService/GetTunerState' 2>/dev/null)
+   boardsinfo=$(grpcurl -plaintext -H 'authorization:'$token'' $1:50051 'braiins.bos.v1.MinerService/GetHashboards' 2>/dev/null)
    
    # Extract the hashrate for all the boards
-   b1_5m_hash=$(echo $boardsinfo | jq '.hashboards[0].stats.realHashrate.last5m.gigahashPerSecond' )
-   b2_5m_hash=$(echo $boardsinfo | jq '.hashboards[1].stats.realHashrate.last5m.gigahashPerSecond' )
-   b3_5m_hash=$(echo $boardsinfo | jq '.hashboards[2].stats.realHashrate.last5m.gigahashPerSecond' )
-   total_5m=$(echo ${b1_5m_hash} + ${b2_5m_hash} + ${b3_5m_hash} | bc)
+   b1_5m_hash=$(echo $boardsinfo | jq '.hashboards[0].stats.realHashrate.last5m.gigahashPerSecond' 2>/dev/null)
+   b2_5m_hash=$(echo $boardsinfo | jq '.hashboards[1].stats.realHashrate.last5m.gigahashPerSecond' 2>/dev/null)
+   b3_5m_hash=$(echo $boardsinfo | jq '.hashboards[2].stats.realHashrate.last5m.gigahashPerSecond' 2>/dev/null)
    
    # Extract the power data
-   watt=$(echo $tunerinfo | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' | tr -d '"')
-   watt=$((watt*1000))
-
-   # Calculate efficiency
-   efficiency=$( printf "%.1f" $(echo "scale=2; ${watt} / ${total_5m}" | bc ) )
+   watt=$(echo $tunerinfo | jq '.powerTargetModeState.profile.estimatedPowerConsumption.watt' 2>/dev/null | tr -d '"')
    
-   if [[ $hash == *"ERROR"* ]]; then
-      echo "$Service UNKNOWN - Error getting information"
+   # Check if we have valid data (machine is running)
+   if [[ "$b1_5m_hash" == "null" || -z "$b1_5m_hash" || "$b2_5m_hash" == "null" || -z "$b2_5m_hash" || "$b3_5m_hash" == "null" || -z "$b3_5m_hash" || "$watt" == "null" || -z "$watt" ]]; then
+      # Machine is off or data unavailable
+      efficiency="U"
+   else
+      # Calculate total hashrate and efficiency
+      total_5m=$(echo ${b1_5m_hash} + ${b2_5m_hash} + ${b3_5m_hash} | bc)
+      watt_milliwatt=$((watt*1000))
+      
+      # Only calculate if total_5m is not zero
+      if (( $(echo "$total_5m > 0" | bc -l) )); then
+         efficiency=$( printf "%.1f" $(echo "scale=2; ${watt_milliwatt} / ${total_5m}" | bc ) )
+      else
+         efficiency="U"
+      fi
+   fi
+   
+   if [[ $efficiency == *"ERROR"* ]]; then
+      echo "$Service UNKNOWN - Error getting efficiency information"
       retVal=3
    else
       # Return the informations
 	  status="OK"
 	  statusCode=0
-	  if [[ $efficiency > $effCritical ]]; then
+	  
+	  # Check if machine is down (efficiency is U)
+	  if [[ "$efficiency" == "U" ]]; then
 	     status="CRITICAL"
 		 statusCode=2
-	  elif [[ ( $efficiency > $effWarning ) ]]; then
+	     echo "$Service $status - Machine éteinte ou données indisponibles | efficiency_j_th=$efficiency machine_type_id=$MachineTypeID"
+	  # Check efficiency only if it is numeric (not "U")
+	  elif [[ "$efficiency" != "U" && "$efficiency" =~ ^[0-9.]+$ && $(echo "$efficiency > $EfficiencyWarning" | bc -l) -eq 1 ]]; then
 	     status="WARNING"
 		 statusCode=1
+	     echo "$Service $status - Efficiency: $efficiency J/TH | efficiency_j_th=$efficiency machine_type_id=$MachineTypeID"
+	  else
+	     echo "$Service $status - Efficiency: $efficiency J/TH | efficiency_j_th=$efficiency machine_type_id=$MachineTypeID"
 	  fi
-      echo "$Service $status - Efficiency: $efficiency J/TH | efficiency=$efficiency"
       retVal=$statusCode
    fi
    
