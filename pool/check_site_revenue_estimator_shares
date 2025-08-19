@@ -1,19 +1,20 @@
 #!/bin/bash
 
 # -----------------------------------------------------------------------------
-# Nagios Plugin : check_revenue_estimator
+# Nagios Plugin : check_revenue_estimator_shares
 #
 # Estime les revenus, coûts et profits d'un site de minage Bitcoin
-# en utilisant les données des autres plugins Nagios et les paliers Hydro-Québec
+# en utilisant les accepted shares et la formule CRC = C × S/D
 #
-# Formule de revenus : Hashrate (TH/s) × FPPS (BTC/jour/TH/s) × Prix Bitcoin ($)
+# Formule de revenus : CRC = C × S/D
+# Où : C = Coinbase block reward (3.125 BTC), S = Shares acceptées, D = Difficulté du réseau
 # Paliers Hydro-Québec : 40 kWh à 0.07708$, reste à 0.11891$ (journaliers)
 #
 # Retourne 9 métriques : revenus réels 5m/60m/24h, coûts réels 5m/60m/24h, profits réels 5m/60m/24h
 # -----------------------------------------------------------------------------
 
 # Variables de service
-Service="REVENUE_ESTIMATOR"
+Service="REVENUE_ESTIMATOR_SHARES"
 
 # Paramètres
 if [[ $# -lt 9 ]]; then
@@ -54,8 +55,8 @@ if ! command -v bc &> /dev/null; then
     exit 3
 fi
 
-# Fonction pour récupérer le hashrate depuis l'API Braiins
-get_hashrate() {
+# Fonction pour récupérer les accepted shares depuis l'API Braiins
+get_accepted_shares() {
     local api_key=$1
     local api_url="https://pool.braiins.com/accounts/profile/json/btc/"
     
@@ -71,56 +72,52 @@ get_hashrate() {
         return 1
     fi
     
-    # Extraction des valeurs de hashrate
-    local hashrate_5m=$(echo "$response" | jq -r '.btc.hash_rate_5m' 2>/dev/null)
-    local hashrate_60m=$(echo "$response" | jq -r '.btc.hash_rate_60m' 2>/dev/null)
-    local hashrate_24h=$(echo "$response" | jq -r '.btc.hash_rate_24h' 2>/dev/null)
-    local hash_rate_unit=$(echo "$response" | jq -r '.btc.hash_rate_unit' 2>/dev/null)
+    # Extraction des valeurs d'accepted shares
+    local shares_5m=$(echo "$response" | jq -r '.btc.accepted_shares_5m // .btc.shares_5m // empty' 2>/dev/null)
+    local shares_60m=$(echo "$response" | jq -r '.btc.accepted_shares_60m // .btc.shares_60m // empty' 2>/dev/null)
+    local shares_24h=$(echo "$response" | jq -r '.btc.accepted_shares_24h // .btc.shares_24h // empty' 2>/dev/null)
     
-    if [[ $hashrate_5m == "null" ]] || [[ -z $hashrate_5m ]]; then
+    if [[ $shares_5m == "null" ]] || [[ -z $shares_5m ]]; then
         echo "ERROR"
         return 1
     fi
     
-    # Conversion en TH/s si nécessaire
-    if [[ $hash_rate_unit == "Gh/s" ]]; then
-        hashrate_5m=$(echo "scale=3; $hashrate_5m/1000" | bc -l)
-        hashrate_60m=$(echo "scale=3; $hashrate_60m/1000" | bc -l)
-        hashrate_24h=$(echo "scale=3; $hashrate_24h/1000" | bc -l)
-    fi
-    
-    echo "$hashrate_5m:$hashrate_60m:$hashrate_24h"
+    echo "$shares_5m:$shares_60m:$shares_24h"
 }
 
-# Fonction pour récupérer le FPPS depuis l'API Braiins
-get_fpps() {
-    local api_key=$1
-    local api_url="https://pool.braiins.com/stats/json/btc"
+# Fonction pour récupérer la difficulté du réseau Bitcoin depuis l'API publique
+get_network_data() {
+    # Utilisation de l'API publique de Blockchain.info pour récupérer la difficulté actuelle
+    local api_url="https://blockchain.info/q/getdifficulty"
     
-    local response=$(curl -s -H "Pool-Auth-Token: $api_key" "$api_url")
+    local response=$(curl -s --max-time 10 "$api_url")
     
     if [[ $? -ne 0 ]]; then
         echo "ERROR"
         return 1
     fi
     
-    if echo "$response" | jq -e '.error' > /dev/null 2>&1; then
+    # Vérification que la réponse n'est pas vide
+    if [[ -z "$response" ]]; then
         echo "ERROR"
         return 1
     fi
     
-    # Récupération du FPPS brut en BTC/jour/TH/s
-    local fpps=$(echo "$response" | jq -r '.btc.fpps_rate // empty')
+    # Gestion de la notation scientifique (ex: 1.29435235580345E14)
+    local difficulty=$(echo "$response" | sed 's/E/*10^/g' | bc -l 2>/dev/null)
     
-    if [[ -z "$fpps" ]] || [[ "$fpps" = "null" ]]; then
+    if [[ -z "$difficulty" ]] || [[ "$difficulty" = "0" ]]; then
         echo "ERROR"
         return 1
     fi
     
-    # Gestion de la notation scientifique si nécessaire
-    local fpps_num=$(echo "$fpps" | sed 's/E/*10^/g' | bc -l 2>/dev/null || echo "$fpps")
-    
-    echo "$fpps_num"
+    echo "$difficulty"
+}
+
+# Fonction pour récupérer la coinbase reward (fixe après le halving d'avril 2024)
+get_coinbase_reward() {
+    # Coinbase block reward actuellement 3.125 BTC après le halving d'avril 2024
+    echo "3.125"
 }
 
 # Fonction pour récupérer le prix Bitcoin depuis CoinGecko
@@ -234,18 +231,30 @@ calculate_period_electric_cost() {
     echo "$cost"
 }
 
-# Fonction pour calculer les revenus par période (réels, pas extrapolés)
-calculate_period_revenue() {
-    local hashrate_th=$1
-    local fpps_btc=$2
-    local btc_price_cad=$3
-    local period_minutes=$4
+# Fonction pour calculer les revenus par période basés sur la formule CRC = C × S/D
+# Les accepted shares sont déjà proportionnels au temps, pas besoin de ratio temporel
+calculate_period_revenue_shares() {
+    local accepted_shares=$1
+    local coinbase_reward=$2
+    local network_difficulty=$3
+    local btc_price_cad=$4
+    local period_minutes=$5
     
-    # FPPS est en BTC/jour/TH/s, on calcule pour la période réelle
-    # 1 jour = 1440 minutes
-    local period_ratio=$(echo "scale=8; $period_minutes / 1440" | bc -l)
-    local period_btc=$(echo "scale=8; $hashrate_th * $fpps_btc * $period_ratio" | bc -l)
-    local period_revenue_cad=$(echo "scale=4; $period_btc * $btc_price_cad" | bc -l)
+    # Formule CRC = C × S/D
+    # Où :
+    # C = Coinbase block reward (3.125 BTC après le halving d'avril 2024)
+    # S = Vos shares acceptées (déjà proportionnelles au temps)
+    # D = Difficulté du réseau
+    
+    # Calcul du BTC gagné pour la période selon la formule CRC
+    # Pas de ratio temporel car les shares sont déjà proportionnels
+    local period_btc=$(echo "scale=12; $coinbase_reward * $accepted_shares / $network_difficulty" | bc -l)
+    
+    # Calcul du revenu en CAD
+    local period_revenue_cad=$(echo "scale=12; $period_btc * $btc_price_cad" | bc -l)
+    
+    # Debug: afficher les étapes du calcul
+    echo "DEBUG: Période ${period_minutes}m - Shares: $accepted_shares, BTC: $period_btc, CAD: $period_revenue_cad" >&2
     
     echo "$period_revenue_cad"
 }
@@ -253,23 +262,31 @@ calculate_period_revenue() {
 # Récupération des données
 echo "Récupération des données..." >&2
 
-# Hashrate (5m, 60m, 24h)
-hashrate_data=$(get_hashrate "$POOL_API_KEY")
-if [[ $hashrate_data == "ERROR" ]]; then
-    echo "$Service UNKNOWN - Impossible de récupérer le hashrate"
+# Accepted Shares (5m, 60m, 24h)
+shares_data=$(get_accepted_shares "$POOL_API_KEY")
+if [[ $shares_data == "ERROR" ]]; then
+    echo "$Service UNKNOWN - Impossible de récupérer les accepted shares"
     exit 3
 fi
 
-hashrate_5m=$(echo "$hashrate_data" | cut -d: -f1)
-hashrate_60m=$(echo "$hashrate_data" | cut -d: -f2)
-hashrate_24h=$(echo "$hashrate_data" | cut -d: -f3)
+shares_5m=$(echo "$shares_data" | cut -d: -f1)
+shares_60m=$(echo "$shares_data" | cut -d: -f2)
+shares_24h=$(echo "$shares_data" | cut -d: -f3)
 
-# FPPS
-fpps=$(get_fpps "$POOL_API_KEY")
-if [[ $fpps == "ERROR" ]]; then
-    echo "$Service UNKNOWN - Impossible de récupérer le FPPS"
+# Debug: afficher les valeurs des shares
+echo "DEBUG: Shares 5m: $shares_5m, 60m: $shares_60m, 24h: $shares_24h" >&2
+
+# Coinbase reward (fixe)
+coinbase_reward=$(get_coinbase_reward)
+echo "DEBUG: Coinbase reward: $coinbase_reward BTC" >&2
+
+# Difficulté du réseau
+network_difficulty=$(get_network_data)
+if [[ $network_difficulty == "ERROR" ]]; then
+    echo "$Service UNKNOWN - Impossible de récupérer la difficulté du réseau"
     exit 3
 fi
+echo "DEBUG: Network difficulty: $network_difficulty" >&2
 
 # Prix Bitcoin (CAD)
 btc_price_cad=$(get_bitcoin_price)
@@ -323,10 +340,10 @@ fi
 # Calculs
 echo "Calculs en cours..." >&2
 
-# Revenus réels (CAD) pour chaque période
-revenue_5m=$(calculate_period_revenue "$hashrate_5m" "$fpps" "$btc_price_cad" 5)
-revenue_60m=$(calculate_period_revenue "$hashrate_60m" "$fpps" "$btc_price_cad" 60)
-revenue_24h=$(calculate_period_revenue "$hashrate_24h" "$fpps" "$btc_price_cad" 1440)
+# Revenus réels (CAD) pour chaque période basés sur la formule CRC = C × S/D
+revenue_5m=$(calculate_period_revenue_shares "$shares_5m" "$coinbase_reward" "$network_difficulty" "$btc_price_cad" 5)
+revenue_60m=$(calculate_period_revenue_shares "$shares_60m" "$coinbase_reward" "$network_difficulty" "$btc_price_cad" 60)
+revenue_24h=$(calculate_period_revenue_shares "$shares_24h" "$coinbase_reward" "$network_difficulty" "$btc_price_cad" 1440)
 
 # Coûts électriques réels (CAD) pour chaque période
 cost_5m=$(calculate_period_electric_cost "$total_power_watts" 5)
@@ -338,10 +355,10 @@ profit_5m=$(echo "scale=4; $revenue_5m - $cost_5m" | bc -l)
 profit_60m=$(echo "scale=4; $revenue_60m - $cost_60m" | bc -l)
 profit_24h=$(echo "scale=4; $revenue_24h - $cost_24h" | bc -l)
 
-# Calcul du pourcentage de profit (basé sur 60m pour la comparaison des seuils)
+# Calcul du pourcentage de profit (basé sur 24h pour la comparaison des seuils)
 profit_percentage=0
-if (( $(echo "$revenue_60m > 0" | bc -l) )); then
-    profit_percentage=$(echo "scale=1; $profit_60m / $revenue_60m * 100" | bc -l)
+if (( $(echo "$revenue_24h > 0" | bc -l) )); then
+    profit_percentage=$(echo "scale=1; $profit_24h / $revenue_24h * 100" | bc -l)
 fi
 
 # Détermination du statut
@@ -364,14 +381,15 @@ format_currency() {
 
 # Construction du message
 if [[ $error_machines -gt 0 ]]; then
-    msg="$Service $status - Profit 60m: $(format_currency $profit_60m)$ CAD, 24h: $(format_currency $profit_24h)$ CAD (${profit_percentage}%) [${active_machines}/${#MACHINE_IP_ARRAY[@]} machines: ${total_power_watts}W, ${error_machines} errors] | "
+    msg="$Service $status - Profit 5m: $(format_currency $profit_5m)$ CAD, 60m: $(format_currency $profit_60m)$ CAD, 24h: $(format_currency $profit_24h)$ CAD (${profit_percentage}% sur 24h) [${active_machines}/${#MACHINE_IP_ARRAY[@]} machines: ${total_power_watts}W, ${error_machines} errors] | "
 else
-    msg="$Service $status - Profit 60m: $(format_currency $profit_60m)$ CAD, 24h: $(format_currency $profit_24h)$ CAD (${profit_percentage}%) [${active_machines} machines: ${total_power_watts}W] | "
+    msg="$Service $status - Profit 5m: $(format_currency $profit_5m)$ CAD, 60m: $(format_currency $profit_60m)$ CAD, 24h: $(format_currency $profit_24h)$ CAD (${profit_percentage}% sur 24h) [${active_machines} machines: ${total_power_watts}W] | "
 fi
 msg+="revenue_5m=$(format_currency $revenue_5m) revenue_60m=$(format_currency $revenue_60m) revenue_24h=$(format_currency $revenue_24h) "
 msg+="cost_5m=$(format_currency $cost_5m) cost_60m=$(format_currency $cost_60m) cost_24h=$(format_currency $cost_24h) "
 msg+="profit_5m=$(format_currency $profit_5m) profit_60m=$(format_currency $profit_60m) profit_24h=$(format_currency $profit_24h) "
-msg+="profit_pct=${profit_percentage} active_machines=${active_machines} total_power=${total_power_watts} error_machines=${error_machines}"
+msg+="profit_pct_24h=${profit_percentage} active_machines=${active_machines} total_power=${total_power_watts} error_machines=${error_machines} "
+msg+="shares_5m=${shares_5m} shares_60m=${shares_60m} shares_24h=${shares_24h}"
 
 echo "$msg"
 exit $statusCode

@@ -1,0 +1,7 @@
+ machine/check_braiins_efficiency  | 22 [32m+++++++++++[m[31m------[m
+ machine/check_machine_efficiency  | 63 [32m++++++++++++++++++++++++++++++++++[m[31m---------------[m
+ machine/check_machine_hashrate    | 69 [32m+++++++++++++++++++++++++++++++++++++++++[m[31m-------------[m
+ machine/check_machine_power       | 43 [32m++++++++++++++++++++++++[m[31m----------[m
+ machine/check_machine_temp_boards | 41 [32m+++++++++++++++++++++++++[m[31m-------[m
+ machine/check_machine_temp_chips  | 49 [32m+++++++++++++++++++++++++++++++[m[31m-------[m
+ 6 files changed, 217 insertions(+), 70 deletions(-)

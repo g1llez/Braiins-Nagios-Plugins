@@ -50,7 +50,7 @@ if [ -z "$FPPS" ] || [ "$FPPS" = "null" ]; then
     echo "UNKNOWN: Could not retrieve FPPS from API response"
     exit 3
 fi
-
+echo "$RESPONSE"
 # Conversion en nombre pour comparaison (gestion de la notation scientifique)
 FPPS_NUM=$(echo "$FPPS" | sed 's/E/*10^/g' | bc -l 2>/dev/null || echo "$FPPS")
 
