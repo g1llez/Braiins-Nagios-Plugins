@@ -24,6 +24,12 @@ Ce dossier contient les plugins Nagios pour le monitoring des pools Braiins.
 - **Description** : Vérifie le taux FPPS des pools Braiins
 - **Usage** : `check_pool_fpps <api_key> <warning_threshold> <critical_threshold>`
 
+### `check_pool_balance`
+- **Description** : Vérifie le solde des comptes avec seuils intelligents basés sur le profit estimé
+- **Usage** : `check_pool_balance <api_key> <warning_threshold_percent> <critical_threshold_percent>`
+- **Unité** : Pourcentage du profit quotidien estimé
+- **Seuils recommandés** : Warning 100%, Critical 50%
+
 ## 🔧 Configuration requise
 
 ### Dépendances
@@ -47,3 +53,7 @@ Ce dossier contient les plugins Nagios pour le monitoring des pools Braiins.
 - **Shares** : Warning 500, Critical 400
 - **Reward** : Warning 200, Critical 190 sats
 - **Daily Reward** : Warning 4900, Critical 4750 sats
+
+### Balance (tous les modèles)
+- **Balance** : Warning 100%, Critical 50% du profit quotidien estimé
+- **Signification** : Warning si solde < 1 jour de profit, Critical si < 0.5 jour

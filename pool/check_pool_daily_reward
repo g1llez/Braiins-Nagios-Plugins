@@ -78,7 +78,23 @@ fi
 # Récupération de la date pour l'affichage
 YESTERDAY_DATE_DISPLAY=$(echo "$RESPONSE" | jq -r '.btc.daily_rewards[0].date | strftime("%Y-%m-%d")')
 
-# Affichage du résultat
-echo "$STATUS: Braiins Daily Reward = $YESTERDAY_REWARD_SATS sats ($YESTERDAY_REWARD_SATS_PER_HOUR sats/h) (User: $USERNAME, Date: $YESTERDAY_DATE_DISPLAY) | daily_reward=$YESTERDAY_REWARD_SATS"
+# Conversion en CAD via Bitcoin Common API
+REWARD_CAD="U"
+CONVERSION_API="http://api.sarius.ca/api/v1/conversion/sats-to-cad"
+CONVERSION_RESPONSE=$(curl -s -f "$CONVERSION_API?satoshis=$YESTERDAY_REWARD_SATS&precision=2" 2>/dev/null)
+
+if [ $? -eq 0 ] && [ -n "$CONVERSION_RESPONSE" ]; then
+    REWARD_CAD=$(echo "$CONVERSION_RESPONSE" | jq -r '.cad_value // "U"' 2>/dev/null)
+    if [ -z "$REWARD_CAD" ] || [ "$REWARD_CAD" = "null" ]; then
+        REWARD_CAD="U"
+    fi
+fi
+
+# Affichage du résultat avec conversion CAD
+if [ "$REWARD_CAD" != "U" ]; then
+    echo "$STATUS: Braiins Daily Reward = $YESTERDAY_REWARD_SATS sats / $REWARD_CAD$ CAD ($YESTERDAY_REWARD_SATS_PER_HOUR sats/h) (User: $USERNAME, Date: $YESTERDAY_DATE_DISPLAY) | daily_reward=$YESTERDAY_REWARD_SATS reward_cad=$REWARD_CAD"
+else
+    echo "$STATUS: Braiins Daily Reward = $YESTERDAY_REWARD_SATS sats ($YESTERDAY_REWARD_SATS_PER_HOUR sats/h) (User: $USERNAME, Date: $YESTERDAY_DATE_DISPLAY) | daily_reward=$YESTERDAY_REWARD_SATS reward_cad=U"
+fi
 
 exit $EXIT_CODE 

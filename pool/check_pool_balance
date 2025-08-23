@@ -1,0 +1,224 @@
+#!/bin/bash
+
+# Plugin Nagios pour vérifier le solde des comptes Braiins Pool
+# Utilise l'API Braiins Pool pour récupérer le solde du compte
+
+
+
+# Fonction pour formater les valeurs BTC avec 8 décimales (format standard)
+format_btc() {
+    local sats=$1
+    printf "%.8f" $(echo "scale=8; $sats / 100000000" | bc -l)
+}
+
+# Fonction pour s'assurer que les valeurs BTC commencent par 0.
+ensure_btc_format() {
+    local value=$1
+    if [[ "$value" =~ ^\.[0-9]+$ ]]; then
+        echo "0$value"
+    else
+        echo "$value"
+    fi
+}
+
+
+
+# Function to get the last withdrawal date or default to 30 days ago
+get_last_withdrawal_date() {
+    # Get payouts without date restrictions (API returns recent payouts by default)
+    local payouts_response=$(curl -s -H "Pool-Auth-Token: $TOKEN" "https://pool.braiins.com/accounts/payouts/json/btc")
+    
+    if [ $? -eq 0 ] && [ -n "$payouts_response" ]; then
+        # Check if response is valid JSON
+        if echo "$payouts_response" | jq . > /dev/null 2>&1; then
+            # Check if there are any payouts at all
+            local has_payouts=$(echo "$payouts_response" | jq -r '.onchain // empty' 2>/dev/null | head -1)
+            
+            if [ -n "$has_payouts" ] && [ "$has_payouts" != "null" ]; then
+                # Look for the last confirmed payout
+                local last_payout_timestamp=$(echo "$payouts_response" | jq -r '.onchain[] | select(.status == "confirmed") | .resolved_at_ts' 2>/dev/null | sort -nr | head -1)
+                
+                if [ -n "$last_payout_timestamp" ] && [ "$last_payout_timestamp" != "null" ] && [ "$last_payout_timestamp" != "" ]; then
+                    echo "$last_payout_timestamp"
+                    return 0
+                fi
+            fi
+        fi
+    fi
+    
+    # If no payout found or API error, default to 30 days ago
+    local default_date=$(date -d "30 days ago" +%s)
+    echo "$default_date"
+}
+
+# Function to get accurate balance since last withdrawal using rewards API
+get_accurate_balance_since_withdrawal() {
+    local withdrawal_timestamp=$1
+    local rewards_response=$(curl -s -H "Pool-Auth-Token: $TOKEN" "https://pool.braiins.com/accounts/rewards/json/btc")
+    
+    if [ $? -eq 0 ] && [ -n "$rewards_response" ]; then
+        # Check if response is valid JSON
+        if echo "$rewards_response" | jq . > /dev/null 2>&1; then
+            # Sum all rewards since the withdrawal date
+            local total_reward_since_withdrawal=$(echo "$rewards_response" | jq -r --arg withdrawal "$withdrawal_timestamp" '.btc.daily_rewards[] | select(.date >= ($withdrawal | tonumber)) | .total_reward' 2>/dev/null | paste -sd+ | bc -l 2>/dev/null || echo "0")
+            
+            if [ -n "$total_reward_since_withdrawal" ] && [ "$total_reward_since_withdrawal" != "null" ] && [ "$total_reward_since_withdrawal" != "0" ]; then
+                # S'assurer que la valeur commence par 0. (pas .)
+                total_reward_since_withdrawal=$(ensure_btc_format "$total_reward_since_withdrawal")
+                
+                echo "$total_reward_since_withdrawal"
+                return 0
+            else
+                echo "0"
+            fi
+        else
+            echo "0"
+        fi
+    else
+        echo "0"
+    fi
+    
+    # Fallback: return 0 if API call fails
+    echo "0"
+}
+
+# Function to calculate days since last withdrawal
+calculate_days_since_withdrawal() {
+    local withdrawal_date=$1
+    local current_date=$(date +%s)
+    
+    # Calculate difference in days
+    local diff_seconds=$(echo "$current_date - $withdrawal_date" | bc -l)
+    local diff_days=$(echo "scale=1; $diff_seconds / 86400" | bc -l)
+    
+    echo "$diff_days"
+}
+
+# Variables
+TOKEN=${1}
+WARNING_THRESHOLD_PERCENT=${2}
+CRITICAL_THRESHOLD_PERCENT=${3}
+
+Service="BRAIINS_BALANCE"
+
+# Vérification des paramètres
+if [ -z "$TOKEN" ] || [ -z "$WARNING_THRESHOLD_PERCENT" ] || [ -z "$CRITICAL_THRESHOLD_PERCENT" ]; then
+    echo "UNKNOWN: All parameters are required"
+    echo "Usage: $0 <token> <warning_threshold_percent> <critical_threshold_percent>"
+    echo "Example: $0 'your_api_key' 80 50"
+    echo "  - Warning: 80% du profit estimé"
+    echo "  - Critical: 50% du profit estimé"
+    exit 3
+fi
+
+# Vérification des dépendances
+if ! command -v curl &> /dev/null; then
+    echo "UNKNOWN: curl is required but not installed"
+    exit 3
+fi
+
+if ! command -v jq &> /dev/null; then
+    echo "UNKNOWN: jq is required but not installed"
+    exit 3
+fi
+
+if ! command -v bc &> /dev/null; then
+    echo "UNKNOWN: bc is required but not installed"
+    exit 3
+fi
+
+# Récupération des données via l'API Braiins
+API_URL="https://pool.braiins.com/accounts/profile/json/btc/"
+RESPONSE=$(curl -s -H "Pool-Auth-Token: $TOKEN" "$API_URL")
+
+# Vérification de la réponse HTTP
+if [ $? -ne 0 ]; then
+    echo "CRITICAL: Failed to connect to Braiins Pool API"
+    exit 2
+fi
+
+# Vérification si la réponse est un JSON valide
+if ! echo "$RESPONSE" | jq . > /dev/null 2>&1; then
+    echo "CRITICAL: Invalid JSON response from API - $RESPONSE"
+    exit 2
+fi
+
+# Vérification si la réponse contient une erreur
+if echo "$RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+    ERROR_MSG=$(echo "$RESPONSE" | jq -r '.error // "Unknown error"')
+    echo "CRITICAL: API Error - $ERROR_MSG"
+    exit 2
+fi
+
+# Extraction des données nécessaires
+USERNAME=$(echo "$RESPONSE" | jq -r '.username // empty')
+BALANCE_BTC=$(ensure_btc_format $(echo "$RESPONSE" | jq -r '.btc.current_balance // empty'))
+
+# Utiliser current_balance comme total (pas de pending dans l'API Braiins)
+TOTAL_BALANCE_BTC="$BALANCE_BTC"
+
+# Extraction des données pour l'estimation des profits
+TODAY_REWARD=$(ensure_btc_format $(echo "$RESPONSE" | jq -r '.btc.today_reward // empty'))
+
+# Vérification que les données sont valides
+if [ -z "$USERNAME" ] || [ "$USERNAME" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve username from API response"
+    exit 3
+fi
+
+if [ -z "$BALANCE_BTC" ] || [ "$BALANCE_BTC" = "null" ]; then
+    echo "UNKNOWN: Could not retrieve balance from API response"
+    exit 3
+fi
+
+
+
+# Estimation du solde depuis le dernier retrait
+ESTIMATED_BALANCE_SINCE_WITHDRAWAL=0
+DAYS_SINCE_WITHDRAWAL=0
+
+# Utiliser UNIQUEMENT l'API rewards pour le solde RÉEL depuis le retrait
+LAST_WITHDRAWAL_DATE=$(get_last_withdrawal_date)
+DAYS_SINCE_WITHDRAWAL=$(calculate_days_since_withdrawal "$LAST_WITHDRAWAL_DATE")
+
+if [ $(echo "$DAYS_SINCE_WITHDRAWAL > 0" | bc -l) -eq 1 ]; then
+    # Get REAL balance since withdrawal (no estimation needed)
+    ESTIMATED_BALANCE_SINCE_WITHDRAWAL=$(get_accurate_balance_since_withdrawal "$LAST_WITHDRAWAL_DATE")
+    
+    if [ $(echo "$ESTIMATED_BALANCE_SINCE_WITHDRAWAL > 0" | bc -l) -eq 1 ]; then
+        # Calculer le pourcentage du solde par rapport au solde RÉEL depuis le dernier retrait
+        BALANCE_PERCENT=$(echo "scale=1; ($BALANCE_BTC * 100) / $ESTIMATED_BALANCE_SINCE_WITHDRAWAL" | bc -l)
+        
+        if [ $(echo "$BALANCE_PERCENT < $CRITICAL_THRESHOLD_PERCENT" | bc -l) -eq 1 ]; then
+            status="CRITICAL"
+            statusCode=2
+        elif [ $(echo "$BALANCE_PERCENT < $WARNING_THRESHOLD_PERCENT" | bc -l) -eq 1 ]; then
+            status="WARNING"
+            statusCode=1
+        fi
+    else
+        echo "UNKNOWN: Impossible de récupérer les données de solde via l'API rewards. Aucun fallback disponible."
+        exit 3
+    fi
+else
+    echo "UNKNOWN: Impossible de calculer les jours depuis le retrait."
+    exit 3
+fi
+
+# Détermination du statut basé sur le pourcentage du profit estimé depuis le dernier retrait
+status="OK"
+statusCode=0
+
+# Affichage du résultat
+if [ $(echo "$ESTIMATED_BALANCE_SINCE_WITHDRAWAL > 0" | bc -l) -eq 1 ]; then
+    # Formatage de la date du dernier retrait
+    last_withdrawal_date_formatted=$(date -d "@$LAST_WITHDRAWAL_DATE" +%Y-%m-%d 2>/dev/null || echo "unknown")
+    
+    days_display=$(printf "%.0f" $DAYS_SINCE_WITHDRAWAL)
+    echo "$Service $status - User: $USERNAME, Actual Balance: $BALANCE_BTC BTC, Estimated Balance: $ESTIMATED_BALANCE_SINCE_WITHDRAWAL BTC (${BALANCE_PERCENT}%), Last Withdrawal: $last_withdrawal_date_formatted ($days_display days ago) | actual_balance=$BALANCE_BTC estimated_balance=$ESTIMATED_BALANCE_SINCE_WITHDRAWAL balance_percent=$BALANCE_PERCENT days_since_withdrawal=$DAYS_SINCE_WITHDRAWAL"
+else
+    echo "UNKNOWN: Impossible de calculer les jours depuis le retrait."
+    exit 3
+fi
+
+exit $statusCode

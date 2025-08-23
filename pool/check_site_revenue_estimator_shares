@@ -120,10 +120,10 @@ get_coinbase_reward() {
     echo "3.125"
 }
 
-# Fonction pour récupérer le prix Bitcoin depuis CoinGecko
+# Fonction pour récupérer le prix Bitcoin depuis Bitcoin Common API
 get_bitcoin_price() {
-    # Récupération du prix en CAD directement depuis CoinGecko
-    local response=$(curl -s --max-time 10 "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=cad")
+    # Récupération du prix en CAD depuis notre API centralisée (avec cache intégré)
+    local response=$(curl -s --max-time 10 "http://api.sarius.ca/api/v1/bitcoin/price")
     
     if [[ $? -ne 0 ]]; then
         echo "ERROR"
@@ -137,7 +137,7 @@ get_bitcoin_price() {
     fi
     
     # Extraction du prix CAD
-    local price_cad=$(echo "$response" | jq -r '.bitcoin.cad // empty' 2>/dev/null)
+    local price_cad=$(echo "$response" | jq -r '.price_cad // empty' 2>/dev/null)
     
     # Validation du prix
     if [[ -z "$price_cad" ]] || [[ "$price_cad" == "null" ]] || [[ "$price_cad" == "0" ]]; then
